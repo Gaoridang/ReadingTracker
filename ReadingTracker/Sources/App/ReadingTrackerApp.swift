@@ -1,10 +1,3 @@
-//
-//  ReadingTrackerApp.swift
-//  ReadingTracker
-//
-//  Created by 이재준 on 6/27/25.
-//
-
 import SwiftUI
 
 @main
@@ -15,6 +8,7 @@ struct ReadingTrackerApp: App {
         WindowGroup {
             ContentView()
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
+                .preferredColorScheme(.light) // Force light mode for clean look
         }
     }
 }
