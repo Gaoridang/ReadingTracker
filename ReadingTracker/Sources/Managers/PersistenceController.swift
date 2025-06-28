@@ -1,14 +1,7 @@
-//
-//  PersistenceController.swift
-//  ReadingTracker
-//
-//  Created by 이재준 on 6/27/25.
-//
-
-
+// PersistenceController.swift
 import CoreData
 
-struct PersistenceController {
+class PersistenceController {
     static let shared = PersistenceController()
 
     static var preview: PersistenceController = {
@@ -34,15 +27,10 @@ struct PersistenceController {
         session.startPage = 50
         session.endPage = 70
         session.distractionCount = 2
-        session.distractionDuration = 120
         session.location = "Home"
         session.book = book
 
-        let event = SessionEvent(context: context)
-        event.id = UUID()
-        event.timestamp = Date()
-        event.eventType = "start"
-        event.session = session
+        let event = SessionEvent.create(type: .start, for: session, context: context)
 
         do {
             try context.save()
@@ -64,6 +52,8 @@ struct PersistenceController {
             if let error = error as NSError? {
                 fatalError("Unresolved error \(error), \(error.userInfo)")
             }
+            self.container.viewContext.automaticallyMergesChangesFromParent = true
+            self.container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
         }
     }
 }

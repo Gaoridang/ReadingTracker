@@ -56,7 +56,7 @@ struct HomeViewContent: View {
                         
                         QuickStatCard(
                             icon: "clock",
-                            value: "\(todayStats.totalMinutes)",
+                            value: "\(Int(todayStats.totalMinutes))",
                             label: "minutes",
                             iconColor: .black.opacity(0.6),
                             backgroundColor: Color.gray.opacity(0.1)

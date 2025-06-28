@@ -1,3 +1,4 @@
+// ReadingSession+CoreDataProperties.swift
 import Foundation
 import CoreData
 
@@ -12,7 +13,6 @@ extension ReadingSession {
     @NSManaged public var startPage: Int16
     @NSManaged public var endPage: Int16
     @NSManaged public var distractionCount: Int16
-    @NSManaged public var distractionDuration: Int16
     @NSManaged public var location: String?
     @NSManaged public var book: Book
     @NSManaged public var sessionEvents: NSSet?
@@ -28,10 +28,7 @@ extension ReadingSession {
         let duration = end.timeIntervalSince(start)
         guard duration > 0 else { return 100 }
         
-        let totalMinutes = duration / 60
-        let distractionMinutes = Double(distractionDuration) / 60
-        let distractionPenalty = (Double(distractionCount) * 5) + (distractionMinutes * 2)
-        
+        let distractionPenalty = Double(distractionCount) * 5 // Penalty of 5 points per distraction
         return max(0, 100 - distractionPenalty)
     }
 }

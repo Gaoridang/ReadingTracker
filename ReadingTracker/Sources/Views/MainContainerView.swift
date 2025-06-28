@@ -17,8 +17,6 @@ struct MainContainerView: View {
                         if selectedTab == 0 {
                             HomeViewContent(currentDate: $currentDate)
                         } else if selectedTab == 1 {
-                            LibraryView()
-                        } else if selectedTab == 2 {
                             EnhancedStatsView()
                         }
                     }

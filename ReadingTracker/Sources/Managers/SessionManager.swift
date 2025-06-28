@@ -1,19 +1,41 @@
+// SessionManager.swift
 import Combine
 import CoreData
 
 class SessionManager: ObservableObject {
     static let shared = SessionManager()
-    @Published var currentSession: ReadingSession?
-    @Published var isTracking: Bool = false
-    @Published var isPaused: Bool = false
-    @Published var distractionCount: Int = 0
-    @Published var totalReadingTime: TimeInterval = 0
+    
+    @Published var currentSession: ReadingSession? {
+        didSet {
+            print("currentSession updated on \(Thread.current.isMainThread ? "main" : "background") thread")
+        }
+    }
+    @Published var isTracking: Bool = false {
+        didSet {
+            print("isTracking updated to \(isTracking) on \(Thread.current.isMainThread ? "main" : "background") thread")
+        }
+    }
+    @Published var isPaused: Bool = false {
+        didSet {
+            print("isPaused updated to \(isPaused) on \(Thread.current.isMainThread ? "main" : "background") thread")
+        }
+    }
+    @Published var distractionCount: Int = 0 {
+        didSet {
+            print("distractionCount updated to \(distractionCount) on \(Thread.current.isMainThread ? "main" : "background") thread")
+        }
+    }
+    @Published var totalReadingTime: TimeInterval = 0 {
+        didSet {
+            print("totalReadingTime updated to \(totalReadingTime) on \(Thread.current.isMainThread ? "main" : "background") thread")
+        }
+    }
+    
     private var lastResumeTime: Date?
     private var distractionStartTime: Date?
     private var distractionTimerSubscription: AnyCancellable?
     private let context: NSManagedObjectContext
     
-    // Use a background context for write operations
     private lazy var backgroundContext: NSManagedObjectContext = {
         let context = NSManagedObjectContext(concurrencyType: .privateQueueConcurrencyType)
         context.parent = self.context
@@ -28,21 +50,18 @@ class SessionManager: ObservableObject {
         context.perform { [weak self] in
             guard let self = self else { return }
             
-            // Create the session in the main context
             let session = ReadingSession(context: self.context)
             session.id = UUID()
             session.book = book
             session.startTime = Date()
             session.startPage = Int16(book.currentPage)
-            session.distractionDuration = 0
+            session.distractionCount = 0
             session.location = location
 
             do {
-                // Save the session to the main context
                 try self.context.save()
                 print("Session saved to main context")
                 
-                // Update state
                 self.currentSession = session
                 self.isTracking = true
                 self.isPaused = false
@@ -50,7 +69,6 @@ class SessionManager: ObservableObject {
                 self.lastResumeTime = Date()
                 self.distractionCount = 0
                 
-                // Notify success
                 completion(.success(()))
             } catch {
                 print("Error saving session: \(error)")
@@ -66,7 +84,6 @@ class SessionManager: ObservableObject {
             guard let self = self,
                   let sessionInContext = try? self.backgroundContext.existingObject(with: session.objectID) as? ReadingSession else { return }
             
-            // Calculate time to add on background thread
             var timeToAdd: TimeInterval = 0
             if let lastResume = self.lastResumeTime {
                 timeToAdd = Date().timeIntervalSince(lastResume)
@@ -76,7 +93,6 @@ class SessionManager: ObservableObject {
             _ = SessionEvent.create(type: .pause, for: sessionInContext, context: self.backgroundContext)
             try? self.backgroundContext.save()
             
-            // Update @Published property on main thread
             DispatchQueue.main.async {
                 self.totalReadingTime += timeToAdd
                 self.isPaused = true
@@ -112,20 +128,22 @@ class SessionManager: ObservableObject {
         distractionStartTime = Date()
         DispatchQueue.main.async {
             self.distractionCount += 1
+            if let session = self.currentSession,
+               let sessionInContext = try? self.context.existingObject(with: session.objectID) as? ReadingSession {
+                sessionInContext.distractionCount = Int16(self.distractionCount)
+                try? self.context.save()
+            }
         }
     }
 
     func endDistraction() {
-        guard let start = distractionStartTime, let session = currentSession else { return }
-        
-        let duration = Date().timeIntervalSince(start)
+        guard distractionStartTime != nil, let session = currentSession else { return }
         
         backgroundContext.perform { [weak self] in
             guard let self = self,
                   let sessionInContext = try? self.backgroundContext.existingObject(with: session.objectID) as? ReadingSession else { return }
             
-            sessionInContext.distractionDuration += Int16(duration)
-            sessionInContext.distractionCount = Int16(self.distractionCount)
+            _ = SessionEvent.create(type: .distraction, for: sessionInContext, context: self.backgroundContext)
             try? self.backgroundContext.save()
             
             DispatchQueue.main.async {
@@ -154,7 +172,7 @@ class SessionManager: ObservableObject {
                 return
             }
             
-            let bookInContext = sessionInContext.book // Directly access the non-optional book property
+            let bookInContext = sessionInContext.book
             
             // Update session
             sessionInContext.endTime = Date()
@@ -167,19 +185,16 @@ class SessionManager: ObservableObject {
             do {
                 try self.backgroundContext.save()
                 
-                // Save to parent context and broadcast notification
                 DispatchQueue.main.async {
                     self.context.performAndWait {
                         do {
                             try self.context.save()
-                            // Post notification after successful save
                             NotificationCenter.default.post(name: .sessionEnded, object: nil)
                         } catch {
                             print("Error saving to main context: \(error)")
                         }
                     }
                     
-                    // Reset session state
                     self.currentSession = nil
                     self.isTracking = false
                     self.isPaused = false

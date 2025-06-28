@@ -4,176 +4,174 @@ import CoreData
 
 struct EnhancedStatsView: View {
     @StateObject private var statsManager = StatsManager.shared
-        @State private var selectedPeriod = StatsPeriod.week
-        @State private var weeklyData: [DailyReading] = []
-        @State private var isLoading = true
-        
-        enum StatsPeriod: String, CaseIterable {
-            case week = "Week"
-            case month = "Month"
-            case year = "Year"
-        }
-        
-        struct DailyReading: Identifiable {
-            let id = UUID()
-            let date: Date
-            let minutes: Int
-            let pages: Int
-            let dayName: String
-        }
-        
-        var body: some View {
-            ScrollView {
-                VStack(spacing: 24) {
-                    // Header
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Reading Statistics")
-                            .font(.system(size: 32, weight: .bold))
-                            .foregroundColor(.black)
-                        
-                        Text("Track your reading progress")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 20)
+    @State private var selectedPeriod = StatsPeriod.week
+    @State private var weeklyData: [DailyReading] = []
+    @State private var isLoading = true
+    
+    enum StatsPeriod: String, CaseIterable {
+        case week = "Week"
+        case month = "Month"
+        case year = "Year"
+    }
+    
+    struct DailyReading: Identifiable {
+        let id = UUID()
+        let date: Date
+        let minutes: Double
+        let pages: Int
+        let dayName: String
+    }
+    
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                // Header
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Reading Statistics")
+                        .font(.system(size: 32, weight: .bold))
+                        .foregroundColor(.black)
                     
-                    // Period Selector
-                    Picker("Period", selection: $selectedPeriod) {
-                        ForEach(StatsPeriod.allCases, id: \.self) { period in
-                            Text(period.rawValue).tag(period)
-                        }
-                    }
-                    .pickerStyle(SegmentedPickerStyle())
-                    .padding(.horizontal, 24)
-                    .onChange(of: selectedPeriod) { _ in
-                        // Load data on next run loop to avoid state modification during view update
-                        DispatchQueue.main.async {
-                            loadData()
-                        }
-                    }
-                    
-                    // Summary Cards
-                    HStack(spacing: 12) {
-                        StatsSummaryCard(
-                            title: "Total Time",
-                            value: formatTime(getPeriodStats().totalMinutes),
-                            icon: "clock.fill",
-                            color: Color(hex: "4CAF50")
-                        )
-                        
-                        StatsSummaryCard(
-                            title: "Pages Read",
-                            value: "\(getPeriodStats().pagesRead)",
-                            icon: "book.fill",
-                            color: Color.blue
-                        )
-                        
-                        StatsSummaryCard(
-                            title: "Sessions",
-                            value: "\(getPeriodStats().sessionsCount)",
-                            icon: "calendar",
-                            color: Color.orange
-                        )
-                    }
-                    .padding(.horizontal, 24)
-                    
-                    // Reading Chart
-                    if !isLoading && !weeklyData.isEmpty {
-                        SimpleBarChart(data: weeklyData, period: selectedPeriod)
-                            .padding(.horizontal, 24)
-                            .transition(.opacity)
-                    } else if isLoading {
-                        ProgressView()
-                            .frame(height: 250)
-                            .frame(maxWidth: .infinity)
-                    }
-                    
-                    // Reading Streak
-                    StreakCard(streak: statsManager.getStreak())
-                        .padding(.horizontal, 24)
-                    
-                    // Reading Insights
-                    if !isLoading {
-                        ReadingInsights(periodStats: getPeriodStats())
-                            .padding(.horizontal, 24)
-                    }
-                    
-                    // Recent Achievements
-                    AchievementsSection()
-                        .padding(.horizontal, 24)
-                    
-                    Spacer(minLength: 100)
+                    Text("Track your reading progress")
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
                 }
-            }
-            .background(Color.gray.opacity(0.05))
-            .onAppear {
-                // Load data on next run loop
-                DispatchQueue.main.async {
-                    loadData()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.top, 20)
+                
+                // Period Selector
+                Picker("Period", selection: $selectedPeriod) {
+                    ForEach(StatsPeriod.allCases, id: \.self) { period in
+                        Text(period.rawValue).tag(period)
+                    }
                 }
+                .pickerStyle(SegmentedPickerStyle())
+                .padding(.horizontal, 24)
+                .onChange(of: selectedPeriod) { _ in
+                    DispatchQueue.main.async {
+                        loadData()
+                    }
+                }
+                
+                // Summary Cards
+                HStack(spacing: 12) {
+                    StatsSummaryCard(
+                        title: "Total Time",
+                        value: formatTime(Int(getPeriodStats().totalMinutes)),
+                        icon: "clock.fill",
+                        color: Color(hex: "4CAF50")
+                    )
+                    
+                    StatsSummaryCard(
+                        title: "Pages Read",
+                        value: "\(getPeriodStats().pagesRead)",
+                        icon: "book.fill",
+                        color: Color.blue
+                    )
+                    
+                    StatsSummaryCard(
+                        title: "Sessions",
+                        value: "\(getPeriodStats().sessionsCount)",
+                        icon: "calendar",
+                        color: Color.orange
+                    )
+                }
+                .padding(.horizontal, 24)
+                
+                // Reading Chart
+                if !isLoading && !weeklyData.isEmpty {
+                    SimpleBarChart(data: weeklyData, period: selectedPeriod)
+                        .padding(.horizontal, 24)
+                        .transition(.opacity)
+                } else if isLoading {
+                    ProgressView()
+                        .frame(height: 250)
+                        .frame(maxWidth: .infinity)
+                }
+                
+                // Reading Streak
+                StreakCard(streak: statsManager.getStreak())
+                    .padding(.horizontal, 24)
+                
+                // Reading Insights
+                if !isLoading {
+                    ReadingInsights(periodStats: getPeriodStats())
+                        .padding(.horizontal, 24)
+                }
+                
+                // Recent Achievements
+                AchievementsSection()
+                    .padding(.horizontal, 24)
+                
+                Spacer(minLength: 100)
             }
         }
-        
-        private func getPeriodStats() -> StatsManager.PeriodStats {
-            switch selectedPeriod {
-            case .week:
-                return statsManager.getWeeklyStats()
-            case .month:
-                return statsManager.getMonthlyStats()
-            case .year:
-                return statsManager.getYearlyStats()
+        .background(Color.gray.opacity(0.05))
+        .onAppear {
+            DispatchQueue.main.async {
+                loadData()
             }
         }
+    }
+    
+    private func getPeriodStats() -> StatsManager.PeriodStats {
+        switch selectedPeriod {
+        case .week:
+            return statsManager.getWeeklyStats()
+        case .month:
+            return statsManager.getMonthlyStats()
+        case .year:
+            return statsManager.getYearlyStats()
+        }
+    }
+    
+    private func loadData() {
+        isLoading = true
         
-        private func loadData() {
-            isLoading = true
+        // Perform data loading asynchronously
+        DispatchQueue.global(qos: .userInitiated).async {
+            let calendar = Calendar.current
+            var data: [DailyReading] = []
             
-            // Perform data loading asynchronously
-            DispatchQueue.global(qos: .userInitiated).async {
-                let calendar = Calendar.current
-                var data: [DailyReading] = []
-                
-                let days = selectedPeriod == .week ? 7 : (selectedPeriod == .month ? 30 : 365)
-                let dateFormatter = DateFormatter()
-                dateFormatter.dateFormat = selectedPeriod == .week ? "EEE" : "d"
-                
-                for i in 0..<min(days, 30) { // Limit to 30 for performance
-                    if let date = calendar.date(byAdding: .day, value: -i, to: Date()) {
-                        let stats = statsManager.getStatsForDate(date)
-                        data.append(DailyReading(
-                            date: date,
-                            minutes: stats.totalMinutes,
-                            pages: stats.pagesRead,
-                            dayName: dateFormatter.string(from: date)
-                        ))
-                    }
-                }
-                
-                let reversedData = data.reversed()
-                
-                // Update UI on main thread
-                DispatchQueue.main.async {
-                    self.weeklyData = Array(reversedData)
-                    self.isLoading = false
+            let days = selectedPeriod == .week ? 7 : (selectedPeriod == .month ? 30 : 365)
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = selectedPeriod == .week ? "EEE" : "d"
+            
+            for i in 0..<min(days, 30) { // Limit to 30 for performance
+                if let date = calendar.date(byAdding: .day, value: -i, to: Date()) {
+                    let stats = statsManager.getStatsForDate(date)
+                    data.append(DailyReading(
+                        date: date,
+                        minutes: stats.totalMinutes,
+                        pages: stats.pagesRead,
+                        dayName: dateFormatter.string(from: date)
+                    ))
                 }
             }
+            
+            let reversedData = data.reversed()
+            
+            // Update UI on main thread
+            DispatchQueue.main.async {
+                self.weeklyData = Array(reversedData)
+                self.isLoading = false
+            }
         }
-        
-        private func formatTime(_ minutes: Int) -> String {
-            if minutes < 60 {
-                return "\(minutes)m"
+    }
+    
+    private func formatTime(_ minutes: Int) -> String {
+        if minutes < 60 {
+            return "\(minutes)m"
+        } else {
+            let hours = minutes / 60
+            let mins = minutes % 60
+            if mins == 0 {
+                return "\(hours)h"
             } else {
-                let hours = minutes / 60
-                let mins = minutes % 60
-                if mins == 0 {
-                    return "\(hours)h"
-                } else {
-                    return "\(hours)h \(mins)m"
-                }
+                return "\(hours)h \(mins)m"
             }
         }
+    }
 }
 
 // Custom Bar Chart Component
@@ -181,7 +179,7 @@ struct SimpleBarChart: View {
     let data: [EnhancedStatsView.DailyReading]
     let period: EnhancedStatsView.StatsPeriod
     
-    private var maxValue: Int {
+    private var maxValue: Double {
         data.map { $0.minutes }.max() ?? 1
     }
     
@@ -207,7 +205,7 @@ struct SimpleBarChart: View {
                         
                         // Value
                         if reading.minutes > 0 {
-                            Text("\(reading.minutes)")
+                            Text("\(Int(reading.minutes))")
                                 .font(.caption2)
                                 .foregroundColor(.black)
                         }
@@ -308,14 +306,14 @@ struct StreakCard: View {
 struct ReadingInsights: View {
     let periodStats: StatsManager.PeriodStats
     
-    var averageMinutesPerDay: Int {
+    var averageMinutesPerDay: Double {
         guard periodStats.daysActive > 0 else { return 0 }
-        return periodStats.totalMinutes / periodStats.daysActive
+        return periodStats.totalMinutes / Double(periodStats.daysActive)
     }
     
-    var averagePagesPerDay: Int {
+    var averagePagesPerDay: Double {
         guard periodStats.daysActive > 0 else { return 0 }
-        return periodStats.pagesRead / periodStats.daysActive
+        return Double(periodStats.pagesRead) / Double(periodStats.daysActive)
     }
     
     var body: some View {
@@ -328,13 +326,13 @@ struct ReadingInsights: View {
                 InsightRow(
                     icon: "clock.arrow.circlepath",
                     title: "Average Daily Time",
-                    value: "\(averageMinutesPerDay) minutes"
+                    value: "\(Int(averageMinutesPerDay)) minutes"
                 )
                 
                 InsightRow(
                     icon: "book.pages",
                     title: "Average Daily Pages",
-                    value: "\(averagePagesPerDay) pages"
+                    value: "\(Int(averagePagesPerDay)) pages"
                 )
                 
                 InsightRow(
@@ -381,9 +379,12 @@ struct AchievementsSection: View {
     @Environment(\.managedObjectContext) private var viewContext
     
     var achievements: [Achievement] {
-        // Calculate achievements based on actual data
-        let totalPages = calculateTotalPages()
-        let totalHours = calculateTotalHours()
+        var totalPages = 0
+        var totalHours = 0
+        viewContext.performAndWait {
+            totalPages = calculateTotalPages()
+            totalHours = calculateTotalHours()
+        }
         let currentStreak = StatsManager.shared.getStreak()
         
         return [
@@ -434,11 +435,10 @@ struct AchievementsSection: View {
     private func calculateTotalHours() -> Int {
         let request: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
         guard let sessions = try? viewContext.fetch(request) else { return 0 }
-        let totalMinutes = sessions.reduce(0) { total, session in
-            let duration = (session.endTime ?? Date()).timeIntervalSince(session.startTime)
-            return total + Int(duration / 60)
+        let totalMinutes = sessions.reduce(0.0) { total, session in
+            return total + (session.actualReadingTime / 60.0)
         }
-        return totalMinutes / 60
+        return Int(totalMinutes / 60.0)
     }
 }
 

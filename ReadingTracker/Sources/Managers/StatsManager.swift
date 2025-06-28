@@ -6,7 +6,7 @@ class StatsManager: ObservableObject {
     static let shared = StatsManager()
         
     struct DailyStats {
-        let totalMinutes: Int
+        let totalMinutes: Double
         let pagesRead: Int
         let sessionsCount: Int
         let averageFocusScore: Double
@@ -14,7 +14,7 @@ class StatsManager: ObservableObject {
     }
     
     struct PeriodStats {
-        let totalMinutes: Int
+        let totalMinutes: Double
         let pagesRead: Int
         let sessionsCount: Int
         let daysActive: Int
@@ -22,37 +22,43 @@ class StatsManager: ObservableObject {
     
     private let context = PersistenceController.shared.container.viewContext
     
+    @MainActor
     func getStatsForDate(_ date: Date) -> DailyStats {
-        let sessions = fetchSessions(for: date)
-        
-        let totalMinutes = sessions.reduce(0) { total, session in
-            let duration = (session.endTime ?? Date()).timeIntervalSince(session.startTime)
-            return total + Int(duration / 60)
+        do {
+            let sessions = try fetchSessions(for: date)
+            
+            let totalMinutes = sessions.reduce(0.0) { total, session in
+                return total + (session.actualReadingTime / 60.0)
+            }
+            
+            let pagesRead = sessions.reduce(0) { $0 + Int($1.endPage - $1.startPage) }
+            
+            let avgFocus = sessions.isEmpty ? 0 : sessions.reduce(0) { total, session in
+                total + session.focusScore
+            } / Double(sessions.count)
+            
+            let locations = sessions.compactMap { $0.location }
+            let favoriteLocation = locations.isEmpty ? nil : mostFrequent(locations)
+            
+            return DailyStats(
+                totalMinutes: totalMinutes,
+                pagesRead: pagesRead,
+                sessionsCount: sessions.count,
+                averageFocusScore: avgFocus,
+                favoriteLocation: favoriteLocation
+            )
+        } catch {
+            print("Error fetching sessions for stats: \(error)")
+            return DailyStats(totalMinutes: 0, pagesRead: 0, sessionsCount: 0, averageFocusScore: 0, favoriteLocation: nil)
         }
-        
-        let pagesRead = sessions.reduce(0) { $0 + Int($1.endPage - $1.startPage) }
-        
-        let avgFocus = sessions.isEmpty ? 100 : sessions.reduce(0) { total, session in
-            total + session.focusScore
-        } / Double(sessions.count)
-        
-        // Find most common location
-        let locations = sessions.compactMap { $0.location }
-        let favoriteLocation = locations.isEmpty ? nil : mostFrequent(locations)
-        
-        return DailyStats(
-            totalMinutes: totalMinutes,
-            pagesRead: pagesRead,
-            sessionsCount: sessions.count,
-            averageFocusScore: avgFocus,
-            favoriteLocation: favoriteLocation
-        )
     }
     
+    @MainActor
     func getTodayStats() -> DailyStats {
         return getStatsForDate(Date())
     }
     
+    @MainActor
     func getWeeklyStats() -> PeriodStats {
         let calendar = Calendar.current
         let endDate = Date()
@@ -61,6 +67,7 @@ class StatsManager: ObservableObject {
         return getStatsForPeriod(from: startDate, to: endDate)
     }
     
+    @MainActor
     func getMonthlyStats() -> PeriodStats {
         let calendar = Calendar.current
         let endDate = Date()
@@ -69,6 +76,7 @@ class StatsManager: ObservableObject {
         return getStatsForPeriod(from: startDate, to: endDate)
     }
     
+    @MainActor
     func getYearlyStats() -> PeriodStats {
         let calendar = Calendar.current
         let endDate = Date()
@@ -77,27 +85,18 @@ class StatsManager: ObservableObject {
         return getStatsForPeriod(from: startDate, to: endDate)
     }
     
+    @MainActor
     private func getStatsForPeriod(from startDate: Date, to endDate: Date) -> PeriodStats {
-        let request: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
-        
-        let calendar = Calendar.current
-        let startOfStartDate = calendar.startOfDay(for: startDate)
-        let endOfEndDate = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: endDate))!
-        
-        request.predicate = NSPredicate(format: "startTime >= %@ AND startTime < %@",
-                                       startOfStartDate as NSDate, endOfEndDate as NSDate)
-        
         do {
-            let sessions = try context.fetch(request)
+            let sessions = try fetchSessionsForPeriod(from: startDate, to: endDate)
             
-            let totalMinutes = sessions.reduce(0) { total, session in
-                let duration = (session.endTime ?? Date()).timeIntervalSince(session.startTime)
-                return total + Int(duration / 60)
+            let totalMinutes = sessions.reduce(0.0) { total, session in
+                return total + (session.actualReadingTime / 60.0)
             }
             
             let pagesRead = sessions.reduce(0) { $0 + Int($1.endPage - $1.startPage) }
             
-            // Count unique days
+            let calendar = Calendar.current
             let uniqueDays = Set(sessions.map { calendar.startOfDay(for: $0.startTime) }).count
             
             return PeriodStats(
@@ -112,30 +111,36 @@ class StatsManager: ObservableObject {
         }
     }
     
+    @MainActor
     func getStreak() -> Int {
         let calendar = Calendar.current
         var streak = 0
         var date = Date()
         
         while true {
-            let sessions = fetchSessions(for: date)
-            if sessions.isEmpty {
-                // Check if it's today - if so, streak is still valid
-                if calendar.isDateInToday(date) {
-                    return streak
+            do {
+                let sessions = try fetchSessions(for: date)
+                if sessions.isEmpty {
+                    if calendar.isDateInToday(date) {
+                        return streak
+                    }
+                    break
                 }
+                streak += 1
+                date = calendar.date(byAdding: .day, value: -1, to: date)!
+            } catch {
+                print("Error fetching sessions for streak: \(error)")
                 break
             }
-            streak += 1
-            date = calendar.date(byAdding: .day, value: -1, to: date)!
         }
         
         return streak
     }
     
-    func getReadingHistory(days: Int) -> [(date: Date, minutes: Int, pages: Int)] {
+    @MainActor
+    func getReadingHistory(days: Int) -> [(date: Date, minutes: Double, pages: Int)] {
         let calendar = Calendar.current
-        var history: [(date: Date, minutes: Int, pages: Int)] = []
+        var history: [(date: Date, minutes: Double, pages: Int)] = []
         
         for i in 0..<days {
             if let date = calendar.date(byAdding: .day, value: -i, to: Date()) {
@@ -147,7 +152,8 @@ class StatsManager: ObservableObject {
         return history.reversed()
     }
     
-    private func fetchSessions(for date: Date) -> [ReadingSession] {
+    @MainActor
+    private func fetchSessions(for date: Date) throws -> [ReadingSession] {
         let request: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
         
         let calendar = Calendar.current
@@ -157,12 +163,21 @@ class StatsManager: ObservableObject {
         request.predicate = NSPredicate(format: "startTime >= %@ AND startTime < %@",
                                        startOfDay as NSDate, endOfDay as NSDate)
         
-        do {
-            return try context.fetch(request)
-        } catch {
-            print("Error fetching sessions: \(error)")
-            return []
-        }
+        return try context.fetch(request)
+    }
+    
+    @MainActor
+    private func fetchSessionsForPeriod(from startDate: Date, to endDate: Date) throws -> [ReadingSession] {
+        let request: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
+        
+        let calendar = Calendar.current
+        let startOfStartDate = calendar.startOfDay(for: startDate)
+        let endOfEndDate = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: endDate))!
+        
+        request.predicate = NSPredicate(format: "startTime >= %@ AND startTime < %@",
+                                       startOfStartDate as NSDate, endOfEndDate as NSDate)
+        
+        return try context.fetch(request)
     }
     
     private func mostFrequent<T: Hashable>(_ array: [T]) -> T? {
@@ -174,6 +189,7 @@ class StatsManager: ObservableObject {
     
     // MARK: - Achievement Helpers
     
+    @MainActor
     func getTotalPagesAllTime() -> Int {
         let request: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
         
@@ -186,22 +202,23 @@ class StatsManager: ObservableObject {
         }
     }
     
+    @MainActor
     func getTotalHoursAllTime() -> Int {
         let request: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
         
         do {
             let sessions = try context.fetch(request)
-            let totalMinutes = sessions.reduce(0) { total, session in
-                let duration = (session.endTime ?? Date()).timeIntervalSince(session.startTime)
-                return total + Int(duration / 60)
+            let totalMinutes = sessions.reduce(0.0) { total, session in
+                return total + (session.actualReadingTime / 60.0)
             }
-            return totalMinutes / 60
+            return Int(totalMinutes / 60.0)
         } catch {
             print("Error fetching total hours: \(error)")
             return 0
         }
     }
     
+    @MainActor
     func getLongestStreak() -> Int {
         // This would require storing historical streak data
         // For now, return current streak
@@ -210,27 +227,27 @@ class StatsManager: ObservableObject {
     
     // MARK: - Reading Speed Analytics
     
+    @MainActor
     func getAverageReadingSpeed() -> Double {
         let request: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
         
         do {
             let sessions = try context.fetch(request)
             let validSessions = sessions.filter { session in
-                let duration = (session.endTime ?? Date()).timeIntervalSince(session.startTime) / 60
-                return duration > 5 && session.pagesRead > 0 // Only count sessions > 5 minutes
+                let duration = session.actualReadingTime / 60.0
+                return duration > 5 && session.pagesRead > 0
             }
             
             guard !validSessions.isEmpty else { return 0 }
             
             let totalPages = validSessions.reduce(0) { $0 + $1.pagesRead }
-            let totalMinutes = validSessions.reduce(0) { total, session in
-                let duration = (session.endTime ?? Date()).timeIntervalSince(session.startTime)
-                return total + Int(duration / 60)
+            let totalMinutes = validSessions.reduce(0.0) { total, session in
+                return total + (session.actualReadingTime / 60.0)
             }
             
             guard totalMinutes > 0 else { return 0 }
             
-            return Double(totalPages) / Double(totalMinutes) * 60 // Pages per hour
+            return Double(totalPages) / totalMinutes * 60 // Pages per hour
         } catch {
             print("Error calculating reading speed: \(error)")
             return 0

@@ -88,22 +88,6 @@ struct SessionRowView: View {
                     
                     Spacer()
                 }
-                
-                // Focus score
-                HStack(spacing: 4) {
-                    Image(systemName: "target")
-                        .font(.system(size: 12))
-                        .foregroundColor(.gray)
-                    Text("\(Int(session.focusScore))% focus")
-                        .font(.system(size: 12))
-                        .foregroundColor(.gray)
-                    
-                    if session.distractionCount > 0 {
-                        Text("• \(session.distractionCount) distractions")
-                            .font(.system(size: 12))
-                            .foregroundColor(.orange)
-                    }
-                }
             }
             
             Spacer()
@@ -136,7 +120,6 @@ struct SessionRowView_Previews: PreviewProvider {
         session.startPage = 100
         session.endPage = 125
         session.distractionCount = 2
-        session.distractionDuration = 300
         return session
     }
 }

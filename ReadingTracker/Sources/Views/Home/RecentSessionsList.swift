@@ -53,8 +53,7 @@ struct RecentSessionsList: View {
     private func sessionSummary(for session: ReadingSession) -> String {
         let duration = (session.endTime ?? Date()).timeIntervalSince(session.startTime) / 60
         let pages = session.endPage - session.startPage
-        let focus = max(100 - Double(session.distractionCount * 10), 0)
-        return "\(Int(duration)) min • \(pages) pages • \(Int(focus))% focus"
+        return "\(Int(duration)) min • \(pages) pages"
     }
     
     private func timeAgo(for date: Date) -> String {
