@@ -1,27 +1,34 @@
-// HomeView.swift
+// HomeViewContent.swift
 import SwiftUI
 import CoreData
 
-// Separate HomeViewContent without date navigation
 struct HomeViewContent: View {
     @Environment(\.managedObjectContext) private var viewContext
     @StateObject private var statsManager = StatsManager.shared
     @Binding var currentDate: Date
     @State private var userName = "Reader"
     @State private var showingAddBook = false
-    @State private var refreshID = UUID() // Add this to force refresh
+    @State private var refreshID = UUID()
+    @State private var todayStats = StatsManager.DailyStats(
+        totalMinutes: 0,
+        pagesRead: 0,
+        sessionsCount: 0,
+        averageFocusScore: 0,
+        favoriteLocation: nil
+    )
+    @State private var weeklyStats = StatsManager.PeriodStats(
+        totalMinutes: 0,
+        pagesRead: 0,
+        sessionsCount: 0,
+        daysActive: 0
+    )
+    @State private var currentStreak = 0
     
-    var activeBooks: [Book] {
-        let request: NSFetchRequest<Book> = Book.fetchRequest()
-        request.predicate = NSPredicate(format: "isActive == YES")
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \Book.dateAdded, ascending: false)]
-        
-        do {
-            return try viewContext.fetch(request)
-        } catch {
-            return []
-        }
-    }
+    @FetchRequest(
+        sortDescriptors: [NSSortDescriptor(keyPath: \Book.dateAdded, ascending: false)],
+        predicate: NSPredicate(format: "isActive == YES"),
+        animation: .default
+    ) private var activeBooks: FetchedResults<Book>
     
     var body: some View {
         ZStack {
@@ -37,10 +44,11 @@ struct HomeViewContent: View {
                         .padding(.top, 20)
                         .padding(.bottom, 24)
                     
+                    // Today's Stats
                     HStack(spacing: 12) {
                         QuickStatCard(
                             icon: "book",
-                            value: "\(statsManager.getTodayStats().pagesRead)",
+                            value: "\(todayStats.pagesRead)",
                             label: "pages today",
                             iconColor: .black.opacity(0.6),
                             backgroundColor: Color.gray.opacity(0.1)
@@ -48,15 +56,60 @@ struct HomeViewContent: View {
                         
                         QuickStatCard(
                             icon: "clock",
-                            value: "\(statsManager.getTodayStats().totalMinutes)",
+                            value: "\(todayStats.totalMinutes)",
                             label: "minutes",
                             iconColor: .black.opacity(0.6),
                             backgroundColor: Color.gray.opacity(0.1)
                         )
                     }
                     .padding(.horizontal, 24)
+                    .padding(.bottom, 20)
+                    
+                    // Quick Stats Preview with navigation to full stats
+                    Button(action: {
+                        NavigationCoordinator.shared.navigateToStatsTab()
+                    }) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Week Overview")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                
+                                HStack(spacing: 16) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "flame.fill")
+                                            .font(.caption)
+                                            .foregroundColor(.orange)
+                                        Text("\(currentStreak) day streak")
+                                            .font(.caption)
+                                            .fontWeight(.medium)
+                                            .foregroundColor(.black)
+                                    }
+                                    
+                                    Text("•")
+                                        .foregroundColor(.gray.opacity(0.5))
+                                    
+                                    Text("\(weeklyStats.pagesRead) pages this week")
+                                        .font(.caption)
+                                        .foregroundColor(.black)
+                                }
+                            }
+                            
+                            Spacer()
+                            
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                        .padding()
+                        .background(Color(hex: "4CAF50").opacity(0.1))
+                        .cornerRadius(12)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .padding(.horizontal, 24)
                     .padding(.bottom, 32)
                     
+                    // Currently Reading Section
                     VStack(alignment: .leading, spacing: 16) {
                         Text("Currently Reading")
                             .font(.system(size: 18, weight: .semibold))
@@ -80,13 +133,21 @@ struct HomeViewContent: View {
                 }
             }
             .refreshable {
-                viewContext.refreshAllObjects()
+                await refreshData()
             }
-            // Listen for session end notification
             .onReceive(NotificationCenter.default.publisher(for: .sessionEnded)) { _ in
-                refreshID = UUID() // Trigger a refresh
+                Task {
+                    await refreshData()
+                }
             }
-            .id(refreshID) // Force re-render when refreshID changes
+            .task {
+                await loadStats()
+            }
+            .onChange(of: currentDate) { _ in
+                Task {
+                    await loadStats()
+                }
+            }
             
             VStack {
                 Spacer()
@@ -104,5 +165,37 @@ struct HomeViewContent: View {
             AddBookView()
                 .environment(\.managedObjectContext, viewContext)
         }
+    }
+    
+    @MainActor
+    private func loadStats() async {
+        // Load stats asynchronously to avoid blocking UI
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { @MainActor in
+                self.todayStats = self.statsManager.getTodayStats()
+            }
+            
+            group.addTask { @MainActor in
+                self.weeklyStats = self.statsManager.getWeeklyStats()
+            }
+            
+            group.addTask { @MainActor in
+                self.currentStreak = self.statsManager.getStreak()
+            }
+        }
+    }
+    
+    @MainActor
+    private func refreshData() async {
+        // Refresh Core Data
+        await viewContext.perform {
+            self.viewContext.refreshAllObjects()
+        }
+        
+        // Reload stats
+        await loadStats()
+        
+        // Update refresh ID to force view refresh
+        refreshID = UUID()
     }
 }

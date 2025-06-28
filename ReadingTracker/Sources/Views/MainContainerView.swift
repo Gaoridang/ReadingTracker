@@ -4,7 +4,7 @@ import SwiftUI
 struct MainContainerView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @StateObject private var sessionManager = SessionManager.shared
-    @StateObject private var navigationCoordinator = NavigationCoordinator.shared
+    @State private var selectedTab = 0 // Local state instead of using NavigationCoordinator
     @State private var currentDate = Date()
     
     var body: some View {
@@ -12,20 +12,21 @@ struct MainContainerView: View {
             VStack(spacing: 0) {
                 // Main Content Area
                 ZStack {
-                    // Tab Content - Only Home and Library now
-                    switch navigationCoordinator.selectedTab {
-                    case 0:
-                        HomeViewContent(currentDate: $currentDate)
-                    case 1:
-                        LibraryView()
-                    default:
-                        HomeViewContent(currentDate: $currentDate)
+                    // Tab Content
+                    Group {
+                        if selectedTab == 0 {
+                            HomeViewContent(currentDate: $currentDate)
+                        } else if selectedTab == 1 {
+                            LibraryView()
+                        } else if selectedTab == 2 {
+                            EnhancedStatsView()
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 
                 // Date Navigation (only shown on Home tab)
-                if navigationCoordinator.selectedTab == 0 {
+                if selectedTab == 0 {
                     DateNavigationView(currentDate: $currentDate)
                         .background(Color.white)
                         .overlay(
@@ -36,18 +37,32 @@ struct MainContainerView: View {
                         )
                 }
                 
-                // Tab Bar - Only 2 tabs now
-                CustomTabBar(selectedTab: $navigationCoordinator.selectedTab)
+                // Tab Bar
+                CustomTabBar(selectedTab: $selectedTab)
                     .background(Color.white)
             }
             .navigationBarHidden(true)
         }
         .navigationViewStyle(StackNavigationViewStyle())
         .ignoresSafeArea(.keyboard)
+        .onAppear {
+            // Sync with NavigationCoordinator if needed
+            if NavigationCoordinator.shared.selectedTab != selectedTab {
+                DispatchQueue.main.async {
+                    NavigationCoordinator.shared.selectedTab = selectedTab
+                }
+            }
+        }
+        .onReceive(NavigationCoordinator.shared.$selectedTab) { newTab in
+            // Only update if different to avoid loops
+            if newTab != selectedTab {
+                selectedTab = newTab
+            }
+        }
     }
 }
 
-// Custom Tab Bar with only 2 tabs
+// Custom Tab Bar with 3 tabs
 struct CustomTabBar: View {
     @Binding var selectedTab: Int
     
@@ -57,14 +72,33 @@ struct CustomTabBar: View {
                 icon: "house",
                 title: "Home",
                 isSelected: selectedTab == 0,
-                action: { selectedTab = 0 }
+                action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        selectedTab = 0
+                    }
+                }
             )
             
             TabBarButton(
                 icon: "books.vertical",
                 title: "Library",
                 isSelected: selectedTab == 1,
-                action: { selectedTab = 1 }
+                action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        selectedTab = 1
+                    }
+                }
+            )
+            
+            TabBarButton(
+                icon: "chart.bar",
+                title: "Stats",
+                isSelected: selectedTab == 2,
+                action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        selectedTab = 2
+                    }
+                }
             )
         }
         .padding(.vertical, 8)

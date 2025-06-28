@@ -1,9 +1,10 @@
+// StatsManager.swift
 import Foundation
 import CoreData
 
 class StatsManager: ObservableObject {
     static let shared = StatsManager()
-    
+        
     struct DailyStats {
         let totalMinutes: Int
         let pagesRead: Int
@@ -68,10 +69,15 @@ class StatsManager: ObservableObject {
         return getStatsForPeriod(from: startDate, to: endDate)
     }
     
+    func getYearlyStats() -> PeriodStats {
+        let calendar = Calendar.current
+        let endDate = Date()
+        let startDate = calendar.date(byAdding: .year, value: -1, to: endDate)!
+        
+        return getStatsForPeriod(from: startDate, to: endDate)
+    }
+    
     private func getStatsForPeriod(from startDate: Date, to endDate: Date) -> PeriodStats {
-        DispatchQueue.main.async {
-            self.context.refreshAllObjects() // Refresh the context to get the latest data
-        }
         let request: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
         
         let calendar = Calendar.current
@@ -127,10 +133,21 @@ class StatsManager: ObservableObject {
         return streak
     }
     
-    private func fetchSessions(for date: Date) -> [ReadingSession] {
-        DispatchQueue.main.async {
-            self.context.refreshAllObjects() // Refresh the context to get the latest data
+    func getReadingHistory(days: Int) -> [(date: Date, minutes: Int, pages: Int)] {
+        let calendar = Calendar.current
+        var history: [(date: Date, minutes: Int, pages: Int)] = []
+        
+        for i in 0..<days {
+            if let date = calendar.date(byAdding: .day, value: -i, to: Date()) {
+                let stats = getStatsForDate(date)
+                history.append((date: date, minutes: stats.totalMinutes, pages: stats.pagesRead))
+            }
         }
+        
+        return history.reversed()
+    }
+    
+    private func fetchSessions(for date: Date) -> [ReadingSession] {
         let request: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
         
         let calendar = Calendar.current
@@ -153,5 +170,70 @@ class StatsManager: ObservableObject {
             counts[element, default: 0] += 1
         }
         return counts.max(by: { $0.value < $1.value })?.key
+    }
+    
+    // MARK: - Achievement Helpers
+    
+    func getTotalPagesAllTime() -> Int {
+        let request: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
+        
+        do {
+            let sessions = try context.fetch(request)
+            return sessions.reduce(0) { $0 + Int($1.endPage - $1.startPage) }
+        } catch {
+            print("Error fetching total pages: \(error)")
+            return 0
+        }
+    }
+    
+    func getTotalHoursAllTime() -> Int {
+        let request: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
+        
+        do {
+            let sessions = try context.fetch(request)
+            let totalMinutes = sessions.reduce(0) { total, session in
+                let duration = (session.endTime ?? Date()).timeIntervalSince(session.startTime)
+                return total + Int(duration / 60)
+            }
+            return totalMinutes / 60
+        } catch {
+            print("Error fetching total hours: \(error)")
+            return 0
+        }
+    }
+    
+    func getLongestStreak() -> Int {
+        // This would require storing historical streak data
+        // For now, return current streak
+        return getStreak()
+    }
+    
+    // MARK: - Reading Speed Analytics
+    
+    func getAverageReadingSpeed() -> Double {
+        let request: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
+        
+        do {
+            let sessions = try context.fetch(request)
+            let validSessions = sessions.filter { session in
+                let duration = (session.endTime ?? Date()).timeIntervalSince(session.startTime) / 60
+                return duration > 5 && session.pagesRead > 0 // Only count sessions > 5 minutes
+            }
+            
+            guard !validSessions.isEmpty else { return 0 }
+            
+            let totalPages = validSessions.reduce(0) { $0 + $1.pagesRead }
+            let totalMinutes = validSessions.reduce(0) { total, session in
+                let duration = (session.endTime ?? Date()).timeIntervalSince(session.startTime)
+                return total + Int(duration / 60)
+            }
+            
+            guard totalMinutes > 0 else { return 0 }
+            
+            return Double(totalPages) / Double(totalMinutes) * 60 // Pages per hour
+        } catch {
+            print("Error calculating reading speed: \(error)")
+            return 0
+        }
     }
 }

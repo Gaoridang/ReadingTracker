@@ -91,10 +91,11 @@ struct EndSessionView: View {
     private func finishSession() {
         if let page = Int(currentPage) {
             print("Ending session with page: \(page)")
-            sessionManager.endSession(currentPage: page)
-            DispatchQueue.main.async {
-                self.dismiss()
-                self.onCompletion()
+            sessionManager.endSession(currentPage: page) {
+                DispatchQueue.main.async {
+                    self.dismiss()
+                    self.onCompletion()
+                }
             }
         } else {
             print("Invalid page input: \(currentPage)")

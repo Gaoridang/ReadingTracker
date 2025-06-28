@@ -6,6 +6,7 @@ struct StartSessionView: View {
     @Environment(\.dismiss) private var dismiss
     let book: Book
     let onStarted: () -> Void
+    @Binding var isPresented: Bool // Binding to control dismissal
     
     var body: some View {
         NavigationView {
@@ -43,8 +44,11 @@ struct StartSessionView: View {
                         SessionManager.shared.startSession(for: book, location: "Home") { result in
                             switch result {
                             case .success:
-                                self.dismiss()
-                                self.onStarted()
+                                print("StartSessionView: Session started, dismissing view")
+                                DispatchQueue.main.async {
+                                    isPresented = false // Directly dismiss using binding
+                                    onStarted()
+                                }
                             case .failure(let error):
                                 print("Failed to start session: \(error)")
                             }

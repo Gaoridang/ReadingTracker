@@ -1,13 +1,5 @@
-//
-//  AddBookView.swift
-//  ReadingTracker
-//
-//  Created by 이재준 on 6/28/25.
-//
-
-
-// AddBookView.swift
 import SwiftUI
+import CoreData
 
 struct AddBookView: View {
     @Environment(\.managedObjectContext) private var viewContext
@@ -17,59 +9,196 @@ struct AddBookView: View {
     @State private var author = ""
     @State private var totalPages = ""
     @State private var currentPage = "0"
+    @State private var category = "Fiction"
+    @State private var difficulty = 3
+    
+    @State private var isLoading = false
+    @State private var error: AppError?
+    
+    let categories = ["Fiction", "Non-Fiction", "Biography", "Science", "Technology", "Poetry", "Philosophy", "History"]
+    
+    var isValid: Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !author.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        Int(totalPages) != nil &&
+        Int(currentPage) != nil
+    }
     
     var body: some View {
         NavigationView {
-            Form {
-                Section("Book Information") {
-                    TextField("Title", text: $title)
-                    TextField("Author", text: $author)
-                    TextField("Total Pages", text: $totalPages)
-                        .keyboardType(.numberPad)
-                    TextField("Current Page (if already started)", text: $currentPage)
-                        .keyboardType(.numberPad)
-                }
-                
-                Section {
-                    Button(action: saveBook) {
-                        Text("Add Book")
-                            .frame(maxWidth: .infinity)
-                            .foregroundColor(.white)
+            ZStack {
+                Form {
+                    Section {
+                        TextField("Title", text: $title)
+                            .autocapitalization(.words)
+                        
+                        TextField("Author", text: $author)
+                            .autocapitalization(.words)
+                    } header: {
+                        Text("Book Information")
                     }
-                    .listRowBackground(Color(hex: "4CAF50"))
-                    .disabled(title.isEmpty || author.isEmpty || totalPages.isEmpty)
+                    
+                    Section {
+                        TextField("Total Pages", text: $totalPages)
+                            .keyboardType(.numberPad)
+                        
+                        TextField("Current Page", text: $currentPage)
+                            .keyboardType(.numberPad)
+                        
+                        if let current = Int(currentPage), let total = Int(totalPages), current > total {
+                            Label("Current page cannot exceed total pages", systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
+                    } header: {
+                        Text("Reading Progress")
+                    } footer: {
+                        Text("Enter 0 if you haven't started reading yet")
+                            .font(.caption)
+                    }
+                    
+                    Section {
+                        Picker("Category", selection: $category) {
+                            ForEach(categories, id: \.self) { category in
+                                Text(category).tag(category)
+                            }
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Reading Difficulty")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                            
+                            HStack {
+                                ForEach(1...5, id: \.self) { level in
+                                    Button(action: { difficulty = level }) {
+                                        Image(systemName: level <= difficulty ? "star.fill" : "star")
+                                            .foregroundColor(Color(hex: "4CAF50"))
+                                            .font(.title3)
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    } header: {
+                        Text("Additional Details")
+                    }
+                    
+                    Section {
+                        Button(action: saveBook) {
+                            if isLoading {
+                                HStack {
+                                    ProgressView()
+                                        .tint(.white)
+                                    Text("Adding Book...")
+                                        .foregroundColor(.white)
+                                }
+                                .frame(maxWidth: .infinity)
+                            } else {
+                                Text("Add Book")
+                                    .frame(maxWidth: .infinity)
+                                    .foregroundColor(.white)
+                                    .fontWeight(.medium)
+                            }
+                        }
+                        .listRowBackground(isValid ? Color(hex: "4CAF50") : Color.gray)
+                        .disabled(!isValid || isLoading)
+                    }
+                }
+                .scrollDismissesKeyboard(.interactively)
+                
+                if isLoading {
+                    LoadingOverlay(message: "Adding book to library...")
                 }
             }
             .navigationTitle("Add New Book")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .disabled(isLoading)
+                }
+                
+                ToolbarItem(placement: .keyboard) {
+                    HStack {
+                        Spacer()
+                        Button("Done") {
+                            hideKeyboard()
+                        }
+                    }
+                }
+            }
+            .errorAlert($error)
+        }
+    }
+    
+    private func saveBook() {
+        // Validate inputs
+        guard let totalPagesInt = Int16(totalPages),
+              let currentPageInt = Int16(currentPage) else {
+            error = AppError.validationError("Please enter valid page numbers")
+            return
+        }
+        
+        if currentPageInt > totalPagesInt {
+            error = AppError.validationError("Current page cannot be greater than total pages")
+            return
+        }
+        
+        if totalPagesInt < 1 {
+            error = AppError.validationError("Total pages must be at least 1")
+            return
+        }
+        
+        isLoading = true
+        
+        // Create book in background context
+        let backgroundContext = NSManagedObjectContext(concurrencyType: .privateQueueConcurrencyType)
+        backgroundContext.parent = viewContext
+        
+        backgroundContext.perform {
+            let newBook = Book(context: backgroundContext)
+            newBook.id = UUID()
+            newBook.title = self.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            newBook.author = self.author.trimmingCharacters(in: .whitespacesAndNewlines)
+            newBook.totalPages = totalPagesInt
+            newBook.currentPage = currentPageInt
+            newBook.difficulty = Int16(self.difficulty)
+            newBook.category = self.category
+            newBook.dateAdded = Date()
+            newBook.isActive = true
+            
+            do {
+                try backgroundContext.save()
+                
+                // Save to parent context
+                self.viewContext.performAndWait {
+                    do {
+                        try self.viewContext.save()
+                        DispatchQueue.main.async {
+                            self.dismiss()
+                        }
+                    } catch {
+                        DispatchQueue.main.async {
+                            self.isLoading = false
+                            self.error = AppError.coreDataError(error)
+                        }
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isLoading = false
+                    self.error = AppError.coreDataError(error)
                 }
             }
         }
     }
     
-    private func saveBook() {
-        guard let totalPagesInt = Int16(totalPages),
-              let currentPageInt = Int16(currentPage) else { return }
-        
-        let newBook = Book(context: viewContext)
-        newBook.id = UUID()
-        newBook.title = title
-        newBook.author = author
-        newBook.totalPages = totalPagesInt
-        newBook.currentPage = currentPageInt
-        newBook.difficulty = 3
-        newBook.dateAdded = Date()
-        newBook.isActive = true
-        
-        do {
-            try viewContext.save()
-            dismiss()
-        } catch {
-            print("Error saving book: \(error)")
-        }
+    private func hideKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }
 

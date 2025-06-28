@@ -155,7 +155,7 @@ struct BookDetailView: View {
         .sheet(isPresented: $showingAddSession) {
             StartSessionView(book: book, onStarted: {
                 showingTrackingOverlay = true
-            })
+            }, isPresented: $showingAddSession) // Pass the binding
             .environment(\.managedObjectContext, viewContext)
             .interactiveDismissDisabled()
         }
