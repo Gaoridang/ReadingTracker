@@ -44,12 +44,12 @@ struct HomeViewContent: View {
                         .padding(.top, 20)
                         .padding(.bottom, 24)
                     
-                    // Today's Stats
+                    // Selected Day's Stats
                     HStack(spacing: 12) {
                         QuickStatCard(
                             icon: "book",
                             value: "\(todayStats.pagesRead)",
-                            label: "pages today",
+                            label: "pages", // Changed from "pages today"
                             iconColor: .black.opacity(0.6),
                             backgroundColor: Color.gray.opacity(0.1)
                         )
@@ -169,10 +169,10 @@ struct HomeViewContent: View {
     
     @MainActor
     private func loadStats() async {
-        // Load stats asynchronously to avoid blocking UI
+        // Load stats for the selected currentDate
         await withTaskGroup(of: Void.self) { group in
             group.addTask { @MainActor in
-                self.todayStats = self.statsManager.getTodayStats()
+                self.todayStats = self.statsManager.getStatsForDate(self.currentDate)
             }
             
             group.addTask { @MainActor in
