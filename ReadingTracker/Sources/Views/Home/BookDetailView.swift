@@ -1,4 +1,3 @@
-// BookDetailView.swift
 import SwiftUI
 import CoreData
 
@@ -6,7 +5,7 @@ struct BookDetailView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var book: Book
-    @State private var showingAddSession = false
+    @StateObject private var sessionManager = SessionManager.shared
     @State private var showingTrackingOverlay = false
     @State private var refreshID = UUID()
     
@@ -116,6 +115,14 @@ struct BookDetailView: View {
                             VStack(spacing: 12) {
                                 ForEach(sessions) { session in
                                     SessionRowView(session: session)
+                                        .onTapGesture {
+                                            // Only open TrackingOverlayView if this is the current active session and not ended
+                                            if let currentSession = sessionManager.currentSession,
+                                               currentSession.objectID == session.objectID,
+                                               currentSession.endTime == nil {
+                                                showingTrackingOverlay = true
+                                            }
+                                        }
                                 }
                             }
                             .padding(.horizontal, 24)
@@ -134,7 +141,7 @@ struct BookDetailView: View {
                 HStack {
                     Spacer()
                     FloatingActionButton(action: {
-                        showingAddSession = true
+                        showingTrackingOverlay = true
                     })
                     .padding(.trailing, 24)
                     .padding(.bottom, 40)
@@ -152,19 +159,19 @@ struct BookDetailView: View {
                 }
             }
         }
-        .sheet(isPresented: $showingAddSession) {
-            StartSessionView(book: book, onStarted: {
-                showingTrackingOverlay = true
-            }, isPresented: $showingAddSession) // Pass the binding
-            .environment(\.managedObjectContext, viewContext)
-            .interactiveDismissDisabled()
-        }
         // Present TrackingOverlayView
         .fullScreenCover(isPresented: $showingTrackingOverlay) {
-            TrackingOverlayView(isPresented: $showingTrackingOverlay, book: book, onSessionEnded: {
-                refreshID = UUID()
-            })
+            TrackingOverlayView(
+                isPresented: $showingTrackingOverlay,
+                book: book,
+                onSessionEnded: {
+                    refreshID = UUID()
+                }
+            )
             .environment(\.managedObjectContext, viewContext)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .sessionEnded)) { _ in
+            refreshID = UUID()
         }
     }
     
@@ -197,14 +204,3 @@ struct EmptySessionsView: View {
         .cornerRadius(12)
     }
 }
-
-// Disable preview - Core Data relationships can cause preview crashes
-// Test by running the app in simulator
-/*
-#Preview {
-    NavigationView {
-        BookDetailView(book: Book.preview)
-            .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
-    }
-}
-*/

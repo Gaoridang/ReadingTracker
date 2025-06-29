@@ -17,10 +17,12 @@ struct SessionRowView: View {
     }
     
     private var duration: String {
-        let start = session.startTime
-        let end = session.endTime ?? Date()
+        // Only calculate duration if session has ended
+        guard let endTime = session.endTime else {
+            return "In Progress"
+        }
         
-        let totalSeconds = Int(end.timeIntervalSince(start))
+        let totalSeconds = Int(endTime.timeIntervalSince(session.startTime))
         let minutes = totalSeconds / 60
         let seconds = totalSeconds % 60
         
@@ -40,7 +42,15 @@ struct SessionRowView: View {
     }
     
     private var pagesRead: Int {
-        Int(session.endPage - session.startPage)
+        // Only show pages if session has ended
+        guard session.endTime != nil else {
+            return 0
+        }
+        return Int(session.endPage - session.startPage)
+    }
+    
+    private var isInProgress: Bool {
+        session.endTime == nil
     }
     
     var body: some View {
@@ -68,22 +78,24 @@ struct SessionRowView: View {
                 HStack(spacing: 16) {
                     // Duration
                     HStack(spacing: 4) {
-                        Image(systemName: "clock")
+                        Image(systemName: isInProgress ? "clock.badge.exclamationmark" : "clock")
                             .font(.system(size: 12))
-                            .foregroundColor(.gray)
+                            .foregroundColor(isInProgress ? .orange : .gray)
                         Text(duration)
                             .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.black)
+                            .foregroundColor(isInProgress ? .orange : .black)
                     }
                     
-                    // Pages
-                    HStack(spacing: 4) {
-                        Image(systemName: "book")
-                            .font(.system(size: 12))
-                            .foregroundColor(.gray)
-                        Text("\(pagesRead) pages")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.black)
+                    // Pages (only show if session ended)
+                    if !isInProgress {
+                        HStack(spacing: 4) {
+                            Image(systemName: "book")
+                                .font(.system(size: 12))
+                                .foregroundColor(.gray)
+                            Text("\(pagesRead) pages")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.black)
+                        }
                     }
                     
                     Spacer()
@@ -91,35 +103,32 @@ struct SessionRowView: View {
             }
             
             Spacer()
+            
+            // Show indicator for in-progress sessions
+            if isInProgress {
+                Circle()
+                    .fill(Color.orange)
+                    .frame(width: 8, height: 8)
+                    .overlay(
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 8, height: 8)
+                            .opacity(0.5)
+                            .scaleEffect(2)
+                            .animation(
+                                Animation.easeInOut(duration: 1.5)
+                                    .repeatForever(autoreverses: true),
+                                value: isInProgress
+                            )
+                    )
+            }
         }
         .padding(16)
         .background(Color.white)
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.gray.opacity(0.1), lineWidth: 1)
+                .stroke(isInProgress ? Color.orange.opacity(0.3) : Color.gray.opacity(0.1), lineWidth: 1)
         )
         .cornerRadius(12)
-    }
-}
-
-// Simplified preview without Core Data
-struct SessionRowView_Previews: PreviewProvider {
-    static var previews: some View {
-        SessionRowView(session: previewSession)
-            .padding()
-            .background(Color.gray.opacity(0.05))
-            .previewLayout(.sizeThatFits)
-    }
-    
-    static var previewSession: ReadingSession {
-        // Create a mock session for preview
-        let session = ReadingSession()
-        session.id = UUID()
-        session.startTime = Date().addingTimeInterval(-3600)
-        session.endTime = Date()
-        session.startPage = 100
-        session.endPage = 125
-        session.distractionCount = 2
-        return session
     }
 }
