@@ -6,7 +6,7 @@ struct TrackingOverlayView: View {
     @State private var currentPage = ""
     @State private var showingEndSession = false
     @State private var showingCancelConfirmation = false
-    @State private var isRecordingDistraction = false
+    @FocusState private var isPageInputFocused: Bool
     @Binding var isPresented: Bool
     let book: Book
     let onSessionEnded: () -> Void
@@ -17,9 +17,11 @@ struct TrackingOverlayView: View {
                 .ignoresSafeArea()
             
             VStack(spacing: 0) {
+                // Minimal Header
                 HStack {
                     Button(action: { showingCancelConfirmation = true }) {
                         Text("Cancel")
+                            .font(.body)
                             .foregroundColor(.red)
                     }
                     
@@ -27,11 +29,14 @@ struct TrackingOverlayView: View {
                     
                     Text(book.title)
                         .font(.headline)
+                        .foregroundColor(.black)
                         .lineLimit(1)
                     
                     Spacer()
                     
+                    // Invisible placeholder for symmetry
                     Text("Cancel")
+                        .font(.body)
                         .foregroundColor(.clear)
                 }
                 .padding()
@@ -43,100 +48,96 @@ struct TrackingOverlayView: View {
                     alignment: .bottom
                 )
                 
-                VStack(spacing: 30) {
+                // Main Content
+                VStack(spacing: 40) {
                     Spacer()
                     
-                    // Timer Display using TimelineView
+                    // Timer Display - Clean and Large
                     TimelineView(.periodic(from: Date(), by: 1.0)) { context in
                         Text(timeString(from: sessionManager.currentDuration(at: context.date)))
-                            .font(.system(size: 60, weight: .thin, design: .monospaced))
+                            .font(.system(size: 56, weight: .light, design: .monospaced))
                             .foregroundColor(.black)
                     }
+                    .padding(.vertical, 20)
                     
-                    // Session Stats
-                    if sessionManager.isTracking, let session = sessionManager.currentSession {
-                        HStack(spacing: 0) {
-                            VStack(spacing: 8) {
-                                Image(systemName: "book")
-                                    .font(.title2)
-                                    .foregroundColor(.black.opacity(0.6))
-                                Text("\(session.pagesRead)")
-                                    .font(.title)
-                                    .bold()
-                                    .foregroundColor(.black)
-                                Text("pages")
-                                    .font(.caption)
-                                    .foregroundColor(.gray)
-                            }
-                            .frame(maxWidth: .infinity)
-                            
-                            Rectangle()
-                                .fill(Color.gray.opacity(0.2))
-                                .frame(width: 1, height: 60)
-                            
-                            VStack(spacing: 8) {
-                                Image(systemName: "exclamationmark.triangle")
-                                    .font(.title2)
-                                    .foregroundColor(.black.opacity(0.6))
-                                Text("\(sessionManager.distractionCount)")
-                                    .font(.title)
-                                    .bold()
-                                    .foregroundColor(.black)
-                                Text("distractions")
-                                    .font(.caption)
-                                    .foregroundColor(.gray)
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                        .padding(.horizontal, 60)
-                    }
-                    
-                    // Page Input
-                    VStack(spacing: 8) {
+                    // Current Page Input - Centered and Focused
+                    VStack(spacing: 12) {
                         Text("Current Page")
                             .font(.subheadline)
                             .foregroundColor(.gray)
                         
-                        TextField("Page number", text: $currentPage)
+                        TextField("0", text: $currentPage)
                             .keyboardType(.numberPad)
-                            .font(.title2)
+                            .font(.system(size: 28, weight: .medium))
                             .multilineTextAlignment(.center)
-                            .frame(width: 120)
-                            .padding()
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(12)
+                            .frame(width: 140)
+                            .padding(.vertical, 16)
+                            .background(Color.gray.opacity(0.08))
+                            .cornerRadius(16)
+                            .focused($isPageInputFocused)
                     }
+                    
+                    // Distraction Counter - Simple and Clean
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 16))
+                            .foregroundColor(.gray)
+                        Text("Distractions: \(sessionManager.distractionCount)")
+                            .font(.body)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(Color.gray.opacity(0.05))
+                    .cornerRadius(20)
                     
                     Spacer()
                     
-                    // Control Buttons
+                    // Control Buttons - Minimal Design
                     VStack(spacing: 16) {
-                        Button(action: toggleReading) {
-                            HStack {
-                                Image(systemName: sessionManager.isPaused ? "play.fill" : "pause.fill")
-                                Text(sessionManager.isPaused ? "Resume" : "Pause")
-                            }
-                            .font(.title3)
-                            .foregroundColor(.white)
-                            .frame(width: 200, height: 56)
-                            .background(sessionManager.isPaused ? Color.orange : Color.gray)
-                            .cornerRadius(28)
-                        }
-                        
-                        if sessionManager.isTracking && !sessionManager.isPaused {
-                            Button(action: toggleDistraction) {
-                                HStack {
-                                    Image(systemName: isRecordingDistraction ? "phone.fill.arrow.down.left" : "phone.fill")
-                                    Text(isRecordingDistraction ? "End Distraction" : "Distraction")
+                        // Pause/Resume and Distraction Buttons
+                        HStack(spacing: 16) {
+                            // Pause/Resume Button
+                            Button(action: toggleReading) {
+                                VStack(spacing: 8) {
+                                    Image(systemName: sessionManager.isPaused ? "play.fill" : "pause.fill")
+                                        .font(.title2)
+                                    Text(sessionManager.isPaused ? "Resume" : "Pause")
+                                        .font(.caption)
+                                        .fontWeight(.medium)
                                 }
-                                .font(.title3)
-                                .foregroundColor(.white)
-                                .frame(width: 200, height: 50)
-                                .background(Color.red)
-                                .cornerRadius(25)
+                                .foregroundColor(sessionManager.isPaused ? .white : .black)
+                                .frame(width: 100, height: 80)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 20)
+                                        .fill(sessionManager.isPaused ? Color.orange : Color.gray.opacity(0.1))
+                                        .shadow(color: .black.opacity(0.05), radius: 5)
+                                )
+                            }
+                            
+                            // Distraction Button - Only visible when not paused
+                            if !sessionManager.isPaused {
+                                Button(action: recordDistraction) {
+                                    VStack(spacing: 8) {
+                                        Image(systemName: "hand.raised.fill")
+                                            .font(.title2)
+                                        Text("Distraction")
+                                            .font(.caption)
+                                            .fontWeight(.medium)
+                                    }
+                                    .foregroundColor(.black)
+                                    .frame(width: 100, height: 80)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 20)
+                                            .fill(Color.gray.opacity(0.1))
+                                            .shadow(color: .black.opacity(0.05), radius: 5)
+                                    )
+                                }
                             }
                         }
+                        .padding(.horizontal, 40)
                         
+                        // End Session Button - Primary CTA
                         Button(action: {
                             if !sessionManager.isPaused {
                                 sessionManager.pauseSession()
@@ -144,13 +145,16 @@ struct TrackingOverlayView: View {
                             showingEndSession = true
                         }) {
                             Text("End Session")
-                                .font(.title3)
+                                .font(.body)
                                 .fontWeight(.semibold)
                                 .foregroundColor(.white)
-                                .frame(width: 250, height: 56)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 56)
                                 .background(Color(hex: "4CAF50"))
                                 .cornerRadius(28)
+                                .shadow(color: Color(hex: "4CAF50").opacity(0.3), radius: 8, y: 4)
                         }
+                        .padding(.horizontal, 40)
                     }
                     .padding(.bottom, 40)
                 }
@@ -158,6 +162,10 @@ struct TrackingOverlayView: View {
         }
         .onAppear {
             setupView()
+            // Auto-focus the page input
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                isPageInputFocused = true
+            }
         }
         .sheet(isPresented: $showingEndSession) {
             EndSessionView(currentPage: $currentPage, onCompletion: {
@@ -191,18 +199,20 @@ struct TrackingOverlayView: View {
         } else {
             sessionManager.pauseSession()
         }
+        
+        // Haptic feedback
+        let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+        impactFeedback.impactOccurred()
     }
     
-    private func toggleDistraction() {
-        if isRecordingDistraction {
-            sessionManager.endDistraction()
-            isRecordingDistraction = false
-        } else {
-            sessionManager.startDistraction()
-            isRecordingDistraction = true
-            let impactFeedback = UIImpactFeedbackGenerator(style: .heavy)
-            impactFeedback.impactOccurred()
-        }
+    private func recordDistraction() {
+        // Simply increment the distraction count
+        sessionManager.startDistraction()
+        sessionManager.endDistraction()
+        
+        // Haptic feedback for distraction
+        let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+        impactFeedback.impactOccurred()
     }
     
     private func timeString(from interval: TimeInterval) -> String {
