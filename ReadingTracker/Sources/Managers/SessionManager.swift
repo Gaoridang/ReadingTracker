@@ -1,4 +1,3 @@
-// SessionManager.swift
 import Combine
 import CoreData
 
@@ -93,7 +92,7 @@ class SessionManager: ObservableObject {
     }
 
     // MARK: - Session Management
-    func startSession(for book: Book, location: String? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
+    func startSession(for book: Book, startingPage: Int?, location: String? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
         if let currentSession = currentSession, currentSession.endTime == nil {
             print("Active session detected: \(currentSession.startTime ?? Date()), endTime: \(currentSession.endTime)")
             DispatchQueue.main.async {
@@ -128,7 +127,7 @@ class SessionManager: ObservableObject {
                 session.id = UUID()
                 session.book = bookInContext
                 session.startTime = Date()
-                session.startPage = Int16(bookInContext.currentPage)
+                session.startPage = Int16(startingPage ?? Int(bookInContext.currentPage))
                 session.distractionCount = 0
                 session.location = location
                 

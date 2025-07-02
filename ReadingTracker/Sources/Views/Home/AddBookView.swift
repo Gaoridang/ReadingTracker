@@ -15,6 +15,11 @@ struct AddBookView: View {
     @State private var isLoading = false
     @State private var error: AppError?
     
+    @FocusState private var focusedField: Field?
+    private enum Field: Hashable {
+        case title, author, totalPages, currentPage
+    }
+    
     let categories = ["Fiction", "Non-Fiction", "Biography", "Science", "Technology", "Poetry", "Philosophy", "History"]
     
     var isValid: Bool {
@@ -30,20 +35,28 @@ struct AddBookView: View {
                 Form {
                     Section {
                         TextField("Title", text: $title)
+                            .focused($focusedField, equals: .title)
                             .autocapitalization(.words)
+                            .onSubmit { hideKeyboard() }
                         
                         TextField("Author", text: $author)
+                            .focused($focusedField, equals: .author)
                             .autocapitalization(.words)
+                            .onSubmit { hideKeyboard() }
                     } header: {
                         Text("Book Information")
                     }
                     
                     Section {
                         TextField("Total Pages", text: $totalPages)
+                            .focused($focusedField, equals: .totalPages)
                             .keyboardType(.numberPad)
+                            .onSubmit { hideKeyboard() }
                         
                         TextField("Current Page", text: $currentPage)
+                            .focused($focusedField, equals: .currentPage)
                             .keyboardType(.numberPad)
+                            .onSubmit { hideKeyboard() }
                         
                         if let current = Int(currentPage), let total = Int(totalPages), current > total {
                             Label("Current page cannot exceed total pages", systemImage: "exclamationmark.triangle")
@@ -107,6 +120,11 @@ struct AddBookView: View {
                     }
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .onAppear {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        focusedField = .title
+                    }
+                }
                 
                 if isLoading {
                     LoadingOverlay(message: "Adding book to library...")
@@ -121,22 +139,12 @@ struct AddBookView: View {
                     }
                     .disabled(isLoading)
                 }
-                
-                ToolbarItem(placement: .keyboard) {
-                    HStack {
-                        Spacer()
-                        Button("Done") {
-                            hideKeyboard()
-                        }
-                    }
-                }
             }
             .errorAlert($error)
         }
     }
     
     private func saveBook() {
-        // Validate inputs
         guard let totalPagesInt = Int16(totalPages),
               let currentPageInt = Int16(currentPage) else {
             error = AppError.validationError("Please enter valid page numbers")
@@ -155,7 +163,6 @@ struct AddBookView: View {
         
         isLoading = true
         
-        // Create book in background context
         let backgroundContext = NSManagedObjectContext(concurrencyType: .privateQueueConcurrencyType)
         backgroundContext.parent = viewContext
         
@@ -173,19 +180,13 @@ struct AddBookView: View {
             
             do {
                 try backgroundContext.save()
-                
-                // Save to parent context
-                self.viewContext.performAndWait {
+                DispatchQueue.main.async {
                     do {
                         try self.viewContext.save()
-                        DispatchQueue.main.async {
-                            self.dismiss()
-                        }
+                        self.dismiss()
                     } catch {
-                        DispatchQueue.main.async {
-                            self.isLoading = false
-                            self.error = AppError.coreDataError(error)
-                        }
+                        self.isLoading = false
+                        self.error = AppError.coreDataError(error)
                     }
                 }
             } catch {

@@ -3,13 +3,14 @@ import SwiftUI
 struct TrackingOverlayView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @StateObject private var sessionManager = SessionManager.shared
-    @State private var currentPage = ""
+    @State private var startingPage = ""
     @State private var showingEndSession = false
     @State private var showingCancelConfirmation = false
     @State private var isSessionStarted = false
     @State private var isStartingSession = false
     @State private var error: AppError?
-    @FocusState private var isPageInputFocused: Bool
+    @State private var finalDuration: TimeInterval = 0
+    @FocusState private var isStartingPageFocused: Bool
     @Binding var isPresented: Bool
     let book: Book
     let onSessionEnded: () -> Void
@@ -18,6 +19,9 @@ struct TrackingOverlayView: View {
         ZStack {
             Color.white
                 .ignoresSafeArea()
+                .onTapGesture {
+                    isStartingPageFocused = false
+                }
             
             VStack(spacing: 0) {
                 // Minimal Header
@@ -58,7 +62,45 @@ struct TrackingOverlayView: View {
                 VStack(spacing: 40) {
                     Spacer()
                     
-                    // Timer Display (세션 시작 후에만 표시)
+                    // Starting Page Input (before session starts)
+                    if !isSessionStarted {
+                        VStack(spacing: 20) {
+                            Image(systemName: "book.pages")
+                                .font(.system(size: 50))
+                                .foregroundColor(Color(hex: "4CAF50"))
+                                .padding(.bottom, 20)
+                            
+                            Text("Where are you starting from?")
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.black)
+                            
+                            VStack(spacing: 12) {
+                                HStack {
+                                    Text("Page")
+                                        .font(.body)
+                                        .foregroundColor(.gray)
+                                    
+                                    TextField("\(book.currentPage)", text: $startingPage)
+                                        .keyboardType(.numberPad)
+                                        .font(.system(size: 24, weight: .medium))
+                                        .multilineTextAlignment(.center)
+                                        .frame(width: 100)
+                                        .padding(.vertical, 12)
+                                        .padding(.horizontal, 16)
+                                        .background(Color.gray.opacity(0.08))
+                                        .cornerRadius(12)
+                                        .focused($isStartingPageFocused)
+                                }
+                                
+                                Text("Book progress: Page \(book.currentPage) of \(book.totalPages)")
+                                    .font(.caption)
+                                    .foregroundColor(.gray.opacity(0.8))
+                            }
+                        }
+                    }
+                    
+                    // Timer Display (after session starts)
                     if isSessionStarted {
                         TimelineView(.periodic(from: Date(), by: 1.0)) { context in
                             Text(timeString(from: sessionManager.currentDuration(at: context.date)))
@@ -68,25 +110,36 @@ struct TrackingOverlayView: View {
                         .padding(.vertical, 20)
                     }
                     
-                    // Current Page Input (세션 시작 후에만 표시)
+                    // Starting Page Display (after session starts)
                     if isSessionStarted {
                         VStack(spacing: 12) {
-                            Text("Current Page")
+                            Text("Started from")
                                 .font(.subheadline)
                                 .foregroundColor(.gray)
-                            TextField("0", text: $currentPage)
-                                .keyboardType(.numberPad)
-                                .font(.system(size: 28, weight: .medium))
-                                .multilineTextAlignment(.center)
-                                .frame(width: 140)
-                                .padding(.vertical, 16)
-                                .background(Color.gray.opacity(0.08))
-                                .cornerRadius(16)
-                                .focused($isPageInputFocused)
+                            
+                            HStack {
+                                Image(systemName: "bookmark.fill")
+                                    .font(.system(size: 20))
+                                    .foregroundColor(Color(hex: "4CAF50"))
+                                
+                                if let session = sessionManager.currentSession {
+                                    Text("Page \(session.startPage)")
+                                        .font(.system(size: 28, weight: .medium))
+                                        .foregroundColor(.black)
+                                }
+                            }
+                            .padding(.vertical, 12)
+                            .padding(.horizontal, 24)
+                            .background(Color.gray.opacity(0.08))
+                            .cornerRadius(16)
+                            
+                            Text("Focus on your reading")
+                                .font(.caption)
+                                .foregroundColor(.gray.opacity(0.8))
                         }
                     }
                     
-                    // Distraction Counter (세션 시작 후에만 표시)
+                    // Distraction Counter (after session starts)
                     if isSessionStarted {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle")
@@ -106,7 +159,7 @@ struct TrackingOverlayView: View {
                     
                     // Control Buttons
                     VStack(spacing: 16) {
-                        // 세션 시작 후에만 Pause와 Distraction 버튼 표시
+                        // Pause/Resume and Distraction buttons (after session starts)
                         if isSessionStarted {
                             HStack(spacing: 16) {
                                 Button(action: toggleReading) {
@@ -147,7 +200,7 @@ struct TrackingOverlayView: View {
                             .padding(.horizontal, 40)
                         }
                         
-                        // Start Session과 End Session 버튼 (동일한 위치)
+                        // Start Session / End Session button
                         if !isSessionStarted {
                             if isStartingSession {
                                 ProgressView()
@@ -172,6 +225,7 @@ struct TrackingOverlayView: View {
                             }
                         } else {
                             Button(action: {
+                                finalDuration = sessionManager.currentDuration(at: Date())
                                 if !sessionManager.isPaused {
                                     sessionManager.pauseSession()
                                 }
@@ -193,6 +247,14 @@ struct TrackingOverlayView: View {
                     .padding(.bottom, 40)
                 }
             }
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        isStartingPageFocused = false
+                    }
+                }
+            }
         }
         .onAppear {
             if sessionManager.currentSession != nil && sessionManager.currentSession?.endTime == nil {
@@ -200,13 +262,20 @@ struct TrackingOverlayView: View {
                 setupView()
             } else {
                 isSessionStarted = false
+                startingPage = "\(book.currentPage)"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    isStartingPageFocused = true
+                }
             }
         }
         .sheet(isPresented: $showingEndSession) {
-            EndSessionView(currentPage: $currentPage, onCompletion: {
-                isPresented = false
-                onSessionEnded()
-            })
+            EndSessionView(
+                frozenDuration: finalDuration,
+                onCompletion: {
+                    isPresented = false
+                    onSessionEnded()
+                }
+            )
             .interactiveDismissDisabled()
         }
         .alert("Cancel Session?", isPresented: $showingCancelConfirmation) {
@@ -214,6 +283,7 @@ struct TrackingOverlayView: View {
             Button("Cancel Session", role: .destructive) {
                 sessionManager.cancelSession()
                 isPresented = false
+                onSessionEnded() // UI 새로고침을 위해 호출
             }
         } message: {
             Text("Are you sure you want to cancel this reading session? Your progress will not be saved.")
@@ -222,45 +292,41 @@ struct TrackingOverlayView: View {
     }
     
     private func setupView() {
-        if let book = sessionManager.currentSession?.book {
-            currentPage = "\(book.currentPage)"
-        } else {
-            currentPage = "\(book.currentPage)"
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            isPageInputFocused = true
-        }
+        // No need to set current page anymore
     }
     
     private func startSession() {
-            guard !isStartingSession, !isSessionStarted else {
-                print("Session is already starting or started.")
-                return
-            }
-            
-            print("Attempting to start session for book: \(book.title)")
-            isStartingSession = true
-            
-            SessionManager.shared.startSession(for: book, location: "Home") { result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success:
-                        print("Session started successfully for book: \(book.title)")
-                        self.isSessionStarted = true
-                        self.isStartingSession = false
-                        self.setupView()
-                    case .failure(let error):
-                        print("Failed to start session: \(error.localizedDescription)")
-                        self.error = AppError(
-                            title: "Session Start Failed",
-                            message: error.localizedDescription,
-                            error: error
-                        )
-                        self.isStartingSession = false
-                    }
+        guard !isStartingSession, !isSessionStarted else {
+            print("Session is already starting or started.")
+            return
+        }
+        
+        print("Attempting to start session for book: \(book.title)")
+        isStartingSession = true
+        
+        let startPage = Int(startingPage) ?? Int(book.currentPage)
+        
+        SessionManager.shared.startSession(for: book, startingPage: startPage, location: "Home") { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    print("Session started successfully for book: \(book.title)")
+                    self.isSessionStarted = true
+                    self.isStartingSession = false
+                    self.setupView()
+                    // isPresented를 false로 설정하지 않음
+                case .failure(let error):
+                    print("Failed to start session: \(error.localizedDescription)")
+                    self.error = AppError(
+                        title: "Session Start Failed",
+                        message: error.localizedDescription,
+                        error: error
+                    )
+                    self.isStartingSession = false
                 }
             }
         }
+    }
     
     private func toggleReading() {
         if sessionManager.isPaused {
