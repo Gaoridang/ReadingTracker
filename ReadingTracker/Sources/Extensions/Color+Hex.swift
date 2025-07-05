@@ -1,11 +1,11 @@
 //
-//  Color+Extensions.swift
+//  Color+Hex.swift
 //  ReadingTracker
 //
-//  Created by 이재준 on 6/27/25.
+//  Created by 이재준 on 7/3/25.
 //
 
-// Color+Extensions.swift
+// MARK: - Color Extension (Color+Hex.swift)
 import SwiftUI
 
 extension Color {
@@ -22,14 +22,14 @@ extension Color {
         case 8: // ARGB (32-bit)
             (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
         default:
-            (a, r, g, b) = (255, 0, 0, 0)
+            (a, r, g, b) = (1, 1, 1, 0)
         }
-        
+
         self.init(
             .sRGB,
             red: Double(r) / 255,
             green: Double(g) / 255,
-            blue: Double(b) / 255,
+            blue:  Double(b) / 255,
             opacity: Double(a) / 255
         )
     }

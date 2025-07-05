@@ -1,10 +1,13 @@
 import Combine
 import CoreData
+import os.log
 
+// MARK: - Modern SessionManager with async/await
+@MainActor
 class SessionManager: ObservableObject {
     static let shared = SessionManager()
     
-    // MARK: - Published Properties (Always updated on main thread)
+    // MARK: - Published Properties (Always on main thread)
     @Published var currentSession: ReadingSession?
     @Published var isTracking: Bool = false
     @Published var isPaused: Bool = false
@@ -13,116 +16,113 @@ class SessionManager: ObservableObject {
     
     // MARK: - Private Properties
     private var lastResumeTime: Date?
-    private let context: NSManagedObjectContext
+    private let container: NSPersistentContainer
+    private let logger = Logger(subsystem: "SessionManager", category: "CoreData")
+    private var isUpdatingState = false // Prevent concurrent state updates
     
+    // Background context for heavy operations
     private lazy var backgroundContext: NSManagedObjectContext = {
-        let context = NSManagedObjectContext(concurrencyType: .privateQueueConcurrencyType)
-        context.parent = self.context
+        let context = container.newBackgroundContext()
+        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
         return context
     }()
-
-    init(context: NSManagedObjectContext = PersistenceController.shared.container.viewContext) {
-        self.context = context
-        // Clean up any incomplete sessions on init
-        cleanupIncompleteSessions()
+    
+    // MARK: - Initialization
+    init(container: NSPersistentContainer = PersistenceController.shared.container) {
+        self.container = container
+        
+        // Setup merge notification handling
+        setupMergeHandling()
+        
+        // Clean up incomplete sessions asynchronously
+        Task {
+            await cleanupIncompleteSessions()
+        }
     }
     
-    // MARK: - Cleanup
-    private func cleanupIncompleteSessions() {
-        context.perform { [weak self] in
-            guard let self = self else { return }
+    // MARK: - Setup Methods
+    private func setupMergeHandling() {
+        NotificationCenter.default.addObserver(
+            forName: .NSManagedObjectContextDidSave,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self = self,
+                  let context = notification.object as? NSManagedObjectContext,
+                  context !== self.container.viewContext else { return }
             
-            let fetchRequest: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
-            fetchRequest.predicate = NSPredicate(format: "endTime == nil")
-            
-            do {
-                let incompleteSessions = try self.context.fetch(fetchRequest)
+            self.container.viewContext.mergeChanges(fromContextDidSave: notification)
+        }
+    }
+    
+    // MARK: - Cleanup Methods
+    private func cleanupIncompleteSessions() async {
+        logger.info("Starting cleanup of incomplete sessions")
+        
+        do {
+            try await backgroundContext.perform {
+                let fetchRequest: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
+                fetchRequest.predicate = NSPredicate(format: "endTime == nil")
                 
-                // Filter out the current session if it exists
+                let incompleteSessions = try self.backgroundContext.fetch(fetchRequest)
+                
+                // Filter out current session if it exists
+                let currentSessionID = self.currentSession?.objectID
                 let sessionsToCleanup = incompleteSessions.filter { session in
-                    // Don't clean up if this is the current session
-                    if let currentSession = self.currentSession {
-                        return session.objectID != currentSession.objectID
-                    }
-                    return true
+                    session.objectID != currentSessionID
                 }
                 
                 for session in sessionsToCleanup {
-                    // Set a reasonable end time (1 minute after start)
+                    // Set reasonable end time (1 minute after start)
                     session.endTime = session.startTime.addingTimeInterval(60)
                     session.endPage = session.startPage // No progress made
-                    print("Cleaned up incomplete session: \(session.id)")
+                    self.logger.info("Cleaned up incomplete session: \(session.id)")
                 }
                 
                 if !sessionsToCleanup.isEmpty {
-                    try self.context.save()
-                    print("Cleaned up \(sessionsToCleanup.count) incomplete sessions")
+                    try self.backgroundContext.save()
+                    self.logger.info("Cleaned up \(sessionsToCleanup.count) incomplete sessions")
                 }
-            } catch {
-                print("Error cleaning up incomplete sessions: \(error)")
             }
+        } catch {
+            logger.error("Error cleaning up incomplete sessions: \(error.localizedDescription)")
         }
     }
-
-    // MARK: - Main Actor for UI Updates
-    @MainActor
-    private func updatePublishedProperties(
-        currentSession: ReadingSession? = nil,
-        isTracking: Bool? = nil,
-        isPaused: Bool? = nil,
-        distractionCount: Int? = nil,
-        totalReadingTime: TimeInterval? = nil,
-        updateSession: Bool = false
-    ) {
-        if updateSession || currentSession != nil {
-            self.currentSession = currentSession
-        }
-        if let isTracking = isTracking {
-            self.isTracking = isTracking
-        }
-        if let isPaused = isPaused {
-            self.isPaused = isPaused
-        }
-        if let distractionCount = distractionCount {
-            self.distractionCount = distractionCount
-        }
-        if let totalReadingTime = totalReadingTime {
-            self.totalReadingTime = totalReadingTime
-        }
-    }
-
-    // MARK: - Session Management
-    func startSession(for book: Book, startingPage: Int?, location: String? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
-        if let currentSession = currentSession, currentSession.endTime == nil {
-            print("Active session detected: \(currentSession.startTime ?? Date()), endTime: \(currentSession.endTime)")
-            DispatchQueue.main.async {
-                completion(.failure(CoreDataError.sessionAlreadyActive))
-            }
+    
+    // MARK: - Session Management (Modern async/await)
+    func startSession(for book: Book, startingPage: Int?, location: String? = nil) async throws {
+        // Prevent concurrent state updates and duplicate calls
+        guard !isUpdatingState else {
+            logger.warning("State update already in progress, ignoring duplicate call")
             return
         }
         
-        print("Starting session for book: \(book.title)")
+        isUpdatingState = true
+        defer {
+            isUpdatingState = false
+            logger.info("State update completed") // 단일 완료 로그
+        }
         
-        backgroundContext.perform { [weak self] in
-            guard let self = self else {
-                DispatchQueue.main.async {
-                    completion(.failure(CoreDataError.objectNotFound))
-                }
+        // Check for existing active session
+        if let currentSession = currentSession, currentSession.endTime == nil {
+            // If it's the same book, don't throw error, just return
+            if currentSession.book.objectID == book.objectID {
+                logger.info("Same book session already active, returning existing session")
                 return
+            } else {
+                logger.warning("Active session detected for different book: \(currentSession.book.title)")
+                throw SessionError.sessionAlreadyActive
             }
-            
-            print("Inside background context perform block")
-            
-            do {
-                guard let bookInContext = try self.backgroundContext.existingObject(with: book.objectID) as? Book else {
-                    print("Failed to fetch book in background context")
-                    DispatchQueue.main.async {
-                        completion(.failure(CoreDataError.objectNotFound))
-                    }
-                    return
+        }
+        
+        do {
+            let sessionID = try await backgroundContext.perform {
+                // Get book in background context
+                guard let bookInContext = try? self.backgroundContext.existingObject(with: book.objectID) as? Book else {
+                    throw SessionError.objectNotFound
                 }
-                print("Book found in background context: \(bookInContext.title)")
                 
+                // Create new session
                 let session = ReadingSession(context: self.backgroundContext)
                 session.id = UUID()
                 session.book = bookInContext
@@ -132,256 +132,349 @@ class SessionManager: ObservableObject {
                 session.location = location
                 
                 try self.backgroundContext.save()
-                print("Background context saved successfully")
+                self.logger.info("Background context saved successfully")
                 
-                self.context.performAndWait {
-                    do {
-                        try self.context.save()
-                        print("Main context saved successfully")
-                        
-                        // 페치 요청을 사용하여 세션 객체를 가져옵니다.
-                        let fetchRequest: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
-                        fetchRequest.predicate = NSPredicate(format: "id == %@", session.id as CVarArg)
-                        fetchRequest.fetchLimit = 1
-                        
-                        if let sessionInMainContext = try self.context.fetch(fetchRequest).first {
-                            print("Session fetched successfully in main context")
-                            Task { @MainActor in
-                                self.updatePublishedProperties(
-                                    currentSession: sessionInMainContext,
-                                    isTracking: true,
-                                    isPaused: false,
-                                    distractionCount: 0,
-                                    totalReadingTime: 0
-                                )
-                                self.lastResumeTime = Date()
-                                completion(.success(()))
-                                print("Completion handler called with success")
-                            }
-                        } else {
-                            print("Failed to fetch session in main context")
-                            // 실패 시 오류를 호출자에게 전달
-                            DispatchQueue.main.async {
-                                completion(.failure(NSError(domain: "SessionError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to fetch session in main context"])))
-                            }
-                        }
-                    } catch {
-                        print("Error saving main context: \(error)")
-                        DispatchQueue.main.async {
-                            completion(.failure(error))
-                        }
-                    }
-                }
-            } catch {
-                print("Error in background context: \(error)")
-                DispatchQueue.main.async {
-                    completion(.failure(error))
-                }
+                return session.id
             }
+            
+            // Small delay to ensure CoreData merge is complete
+            try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+            
+            // Fetch session in view context using ID
+            let fetchRequest: NSFetchRequest<ReadingSession> = ReadingSession.fetchRequest()
+            fetchRequest.predicate = NSPredicate(format: "id == %@", sessionID as CVarArg)
+            fetchRequest.fetchLimit = 1
+            
+            guard let sessionInViewContext = try container.viewContext.fetch(fetchRequest).first else {
+                throw SessionError.sessionNotFound
+            }
+            
+            // Update UI state sequentially with delays to prevent modal dismissal
+            await updateSessionStateSequentially(
+                currentSession: sessionInViewContext,
+                isTracking: true,
+                isPaused: false,
+                distractionCount: 0,
+                totalReadingTime: 0
+            )
+            
+            lastResumeTime = Date()
+            logger.info("Session started successfully") // 단일 성공 로그
+            
+        } catch {
+            logger.error("Error starting session: \(error.localizedDescription)")
+            throw error
         }
     }
-
-    func pauseSession() {
+    
+    func pauseSession() async throws {
         guard let session = currentSession, isTracking, !isPaused else { return }
         
-        backgroundContext.perform { [weak self] in
-            guard let self = self,
-                  let sessionInContext = try? self.backgroundContext.existingObject(with: session.objectID) as? ReadingSession else { return }
-            
-            // Calculate time to add
-            var timeToAdd: TimeInterval = 0
-            if let lastResume = self.lastResumeTime {
-                timeToAdd = Date().timeIntervalSince(lastResume)
-                self.lastResumeTime = nil
-            }
-            
-            // Create pause event
-            _ = SessionEvent.create(type: .pause, for: sessionInContext, context: self.backgroundContext)
-            
-            do {
+        logger.info("Pausing session")
+        
+        do {
+            try await backgroundContext.perform {
+                guard let sessionInContext = try? self.backgroundContext.existingObject(with: session.objectID) as? ReadingSession else {
+                    throw SessionError.objectNotFound
+                }
+                
+                // Create pause event
+                _ = SessionEvent.create(type: .pause, for: sessionInContext, context: self.backgroundContext)
+                
                 try self.backgroundContext.save()
-                
-                // Update main context
-                self.context.performAndWait {
-                    try? self.context.save()
-                }
-                
-                // Update UI on main thread
-                Task { @MainActor in
-                    self.totalReadingTime += timeToAdd
-                    self.isPaused = true
-                }
-            } catch {
-                print("Error pausing session: \(error)")
             }
+            
+            // Update UI state
+            var timeToAdd: TimeInterval = 0
+            if let lastResume = lastResumeTime {
+                timeToAdd = Date().timeIntervalSince(lastResume)
+                lastResumeTime = nil
+            }
+            
+            await updateSessionStateSequentially(
+                isPaused: true,
+                totalReadingTime: totalReadingTime + timeToAdd
+            )
+            
+            logger.info("Session paused successfully")
+            
+        } catch {
+            logger.error("Error pausing session: \(error.localizedDescription)")
+            throw error
         }
     }
-
-    func resumeSession() {
+    
+    func resumeSession() async throws {
         guard let session = currentSession, isTracking, isPaused else { return }
         
-        backgroundContext.perform { [weak self] in
-            guard let self = self,
-                  let sessionInContext = try? self.backgroundContext.existingObject(with: session.objectID) as? ReadingSession else { return }
-            
-            self.lastResumeTime = Date()
-            
-            // Create resume event
-            _ = SessionEvent.create(type: .resume, for: sessionInContext, context: self.backgroundContext)
-            
-            do {
+        logger.info("Resuming session")
+        
+        do {
+            try await backgroundContext.perform {
+                guard let sessionInContext = try? self.backgroundContext.existingObject(with: session.objectID) as? ReadingSession else {
+                    throw SessionError.objectNotFound
+                }
+                
+                // Create resume event
+                _ = SessionEvent.create(type: .resume, for: sessionInContext, context: self.backgroundContext)
+                
                 try self.backgroundContext.save()
-                
-                // Update main context
-                self.context.performAndWait {
-                    try? self.context.save()
-                }
-                
-                // Update UI on main thread
-                Task { @MainActor in
-                    self.isPaused = false
-                }
-            } catch {
-                print("Error resuming session: \(error)")
             }
+            
+            // Update UI state
+            lastResumeTime = Date()
+            await updateSessionStateSequentially(isPaused: false)
+            
+            logger.info("Session resumed successfully")
+            
+        } catch {
+            logger.error("Error resuming session: \(error.localizedDescription)")
+            throw error
         }
     }
-
-    func recordDistraction() {
+    
+    func recordDistraction() async throws {
         guard isTracking, !isPaused, let session = currentSession else { return }
         
-        backgroundContext.perform { [weak self] in
-            guard let self = self,
-                  let sessionInContext = try? self.backgroundContext.existingObject(with: session.objectID) as? ReadingSession else { return }
-            
-            // Increment distraction count
-            let newCount = self.distractionCount + 1
-            sessionInContext.distractionCount = Int16(newCount)
-            
-            // Create distraction event
-            _ = SessionEvent.create(type: .distraction, for: sessionInContext, context: self.backgroundContext)
-            
-            do {
-                try self.backgroundContext.save()
-                
-                // Update main context
-                self.context.performAndWait {
-                    try? self.context.save()
-                }
-                
-                // Update UI on main thread
-                Task { @MainActor in
-                    self.distractionCount = newCount
-                }
-            } catch {
-                print("Error recording distraction: \(error)")
-            }
-        }
-    }
-
-    func endSession(currentPage: Int, completion: @escaping () -> Void) {
-        guard let session = currentSession else {
-            DispatchQueue.main.async {
-                completion()
-            }
-            return
-        }
+        logger.info("Recording distraction")
         
-        backgroundContext.perform { [weak self] in
-            guard let self = self,
-                  let sessionInContext = try? self.backgroundContext.existingObject(with: session.objectID) as? ReadingSession else {
-                DispatchQueue.main.async {
-                    completion()
+        do {
+            let newCount = try await backgroundContext.perform {
+                guard let sessionInContext = try? self.backgroundContext.existingObject(with: session.objectID) as? ReadingSession else {
+                    throw SessionError.objectNotFound
                 }
-                return
-            }
-            
-            let bookInContext = sessionInContext.book
-            
-            // Calculate final reading time if not paused
-            var finalTimeToAdd: TimeInterval = 0
-            if !self.isPaused, let lastResume = self.lastResumeTime {
-                finalTimeToAdd = Date().timeIntervalSince(lastResume)
-            }
-            
-            // Update session
-            sessionInContext.endTime = Date()
-            sessionInContext.endPage = Int16(currentPage)
-            sessionInContext.distractionCount = Int16(self.distractionCount)
-            
-            // Update book progress
-            bookInContext.currentPage = Int16(currentPage)
-            
-            do {
+                
+                // Increment distraction count
+                let newCount = self.distractionCount + 1
+                sessionInContext.distractionCount = Int16(newCount)
+                
+                // Create distraction event
+                _ = SessionEvent.create(type: .distraction, for: sessionInContext, context: self.backgroundContext)
+                
                 try self.backgroundContext.save()
                 
-                // Update main context
-                self.context.performAndWait {
-                    do {
-                        try self.context.save()
-                        NotificationCenter.default.post(name: .sessionEnded, object: nil)
-                    } catch {
-                        print("Error saving to main context: \(error)")
-                    }
-                }
-                print("Ending session for page \(currentPage)")
-                
-                // Reset state on main thread
-                Task { @MainActor in
-                    self.updatePublishedProperties(
-                        currentSession: nil,
-                        isTracking: false,
-                        isPaused: false,
-                        distractionCount: 0,
-                        totalReadingTime: 0
-                    )
-                    self.lastResumeTime = nil
-                    print("Session state reset: currentSession is now nil")
-                    completion()
-                }
-            } catch {
-                print("Error ending session: \(error)")
-                DispatchQueue.main.async {
-                    completion()
-                }
+                return newCount
             }
+            
+            // Update UI state
+            await updateSessionStateSequentially(distractionCount: newCount)
+            
+            logger.info("Distraction recorded successfully")
+            
+        } catch {
+            logger.error("Error recording distraction: \(error.localizedDescription)")
+            throw error
         }
     }
-
-    func cancelSession() {
+    
+    func endSession(currentPage: Int) async throws {
         guard let session = currentSession else { return }
         
-        backgroundContext.perform { [weak self] in
-            guard let self = self,
-                  let sessionInContext = try? self.backgroundContext.existingObject(with: session.objectID) as? ReadingSession else { return }
-            
-            self.backgroundContext.delete(sessionInContext)
-            
-            do {
+        logger.info("Ending session at page \(currentPage)")
+        
+        do {
+            try await backgroundContext.perform {
+                guard let sessionInContext = try? self.backgroundContext.existingObject(with: session.objectID) as? ReadingSession else {
+                    throw SessionError.objectNotFound
+                }
+                
+                let bookInContext = sessionInContext.book
+                
+                // Calculate final reading time if not paused
+                if !self.isPaused, let lastResume = self.lastResumeTime {
+                    let finalTimeToAdd = Date().timeIntervalSince(lastResume)
+                    // Could store this if needed
+                }
+                
+                // Update session
+                sessionInContext.endTime = Date()
+                sessionInContext.endPage = Int16(currentPage)
+                sessionInContext.distractionCount = Int16(self.distractionCount)
+                
+                // Update book progress
+                bookInContext.currentPage = Int16(currentPage)
+                
                 try self.backgroundContext.save()
-                
-                // Update main context
-                self.context.performAndWait {
-                    try? self.context.save()
+            }
+            
+            // Reset UI state sequentially
+            await updateSessionStateSequentially(
+                currentSession: nil,
+                isTracking: false,
+                isPaused: false,
+                distractionCount: 0,
+                totalReadingTime: 0
+            )
+            
+            lastResumeTime = nil
+            
+            // Post notification after a small delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                NotificationCenter.default.post(name: .sessionEnded, object: nil)
+            }
+            
+            logger.info("Session ended successfully")
+            
+        } catch {
+            logger.error("Error ending session: \(error.localizedDescription)")
+            throw error
+        }
+    }
+    
+    func cancelSession() async throws {
+        guard let session = currentSession else { return }
+        
+        logger.info("Canceling session")
+        
+        do {
+            try await backgroundContext.perform {
+                guard let sessionInContext = try? self.backgroundContext.existingObject(with: session.objectID) as? ReadingSession else {
+                    throw SessionError.objectNotFound
                 }
                 
-                // Reset state on main thread
-                Task { @MainActor in
-                    self.updatePublishedProperties(
-                        currentSession: nil,
-                        isTracking: false,
-                        isPaused: false,
-                        distractionCount: 0,
-                        totalReadingTime: 0
-                    )
-                    self.lastResumeTime = nil
-                }
+                self.backgroundContext.delete(sessionInContext)
+                try self.backgroundContext.save()
+            }
+            
+            // Reset UI state sequentially
+            await updateSessionStateSequentially(
+                currentSession: nil,
+                isTracking: false,
+                isPaused: false,
+                distractionCount: 0,
+                totalReadingTime: 0
+            )
+            
+            lastResumeTime = nil
+            
+            logger.info("Session canceled successfully")
+            
+        } catch {
+            logger.error("Error canceling session: \(error.localizedDescription)")
+            throw error
+        }
+    }
+    
+    // MARK: - Legacy Support Methods (for backward compatibility)
+    func startSession(for book: Book, startingPage: Int?, location: String? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
+        Task {
+            do {
+                try await startSession(for: book, startingPage: startingPage, location: location)
+                completion(.success(()))
             } catch {
-                print("Error canceling session: \(error)")
+                completion(.failure(error))
             }
         }
     }
     
+    func pauseSession() {
+        Task {
+            do {
+                try await pauseSession()
+            } catch {
+                logger.error("Error in legacy pauseSession: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    func resumeSession() {
+        Task {
+            do {
+                try await resumeSession()
+            } catch {
+                logger.error("Error in legacy resumeSession: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    func recordDistraction() {
+        Task {
+            do {
+                try await recordDistraction()
+            } catch {
+                logger.error("Error in legacy recordDistraction: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    func endSession(currentPage: Int, completion: @escaping () -> Void) {
+        Task {
+            do {
+                try await endSession(currentPage: currentPage)
+                completion()
+            } catch {
+                logger.error("Error in legacy endSession: \(error.localizedDescription)")
+                completion()
+            }
+        }
+    }
+    
+    func cancelSession() {
+        Task {
+            do {
+                try await cancelSession()
+            } catch {
+                logger.error("Error in legacy cancelSession: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    // MARK: - Sequential State Update Methods
+    private func updateSessionStateSequentially(
+        currentSession: ReadingSession? = nil,
+        isTracking: Bool? = nil,
+        isPaused: Bool? = nil,
+        distractionCount: Int? = nil,
+        totalReadingTime: TimeInterval? = nil
+    ) async {
+        // Update @Published properties one at a time with small delays
+        // to prevent "Publishing changes from within view updates" warnings
+        
+        if let currentSession = currentSession {
+            self.currentSession = currentSession
+            try? await Task.sleep(nanoseconds: 10_000_000) // 0.01 seconds
+        }
+        
+        if let isTracking = isTracking {
+            self.isTracking = isTracking
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        
+        if let isPaused = isPaused {
+            self.isPaused = isPaused
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        
+        if let distractionCount = distractionCount {
+            self.distractionCount = distractionCount
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        
+        if let totalReadingTime = totalReadingTime {
+            self.totalReadingTime = totalReadingTime
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+    
+    // MARK: - Deprecated Method (kept for compatibility)
+    private func updateSessionState(
+        currentSession: ReadingSession? = nil,
+        isTracking: Bool? = nil,
+        isPaused: Bool? = nil,
+        distractionCount: Int? = nil,
+        totalReadingTime: TimeInterval? = nil
+    ) async {
+        // Use the new sequential update method
+        await updateSessionStateSequentially(
+            currentSession: currentSession,
+            isTracking: isTracking,
+            isPaused: isPaused,
+            distractionCount: distractionCount,
+            totalReadingTime: totalReadingTime
+        )
+    }
+    
+    // MARK: - Utility Methods
     func currentDuration(at date: Date) -> TimeInterval {
         guard isTracking else { return 0 }
         
@@ -393,22 +486,66 @@ class SessionManager: ObservableObject {
             return totalReadingTime
         }
     }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
 }
 
-// MARK: - Error Types
-enum CoreDataError: LocalizedError {
+// MARK: - Modern Error Types
+enum SessionError: LocalizedError {
     case objectNotFound
+    case sessionNotFound
     case saveFailed(Error)
     case sessionAlreadyActive
+    case invalidContext
     
     var errorDescription: String? {
         switch self {
         case .objectNotFound:
-            return "The requested object could not be found"
+            return "요청한 객체를 찾을 수 없습니다"
+        case .sessionNotFound:
+            return "세션을 찾을 수 없습니다"
         case .saveFailed(let error):
-            return "Failed to save: \(error.localizedDescription)"
+            return "저장 실패: \(error.localizedDescription)"
         case .sessionAlreadyActive:
-            return "A reading session is already in progress"
+            return "이미 진행 중인 독서 세션이 있습니다"
+        case .invalidContext:
+            return "유효하지 않은 컨텍스트입니다"
         }
+    }
+}
+
+// MARK: - Extensions
+extension Notification.Name {
+    static let sessionEnded = Notification.Name("sessionEnded")
+    static let sessionPaused = Notification.Name("sessionPaused")
+    static let sessionResumed = Notification.Name("sessionResumed")
+}
+
+// MARK: - Modern Usage Example
+extension SessionManager {
+    /// Modern async usage example
+    func performSessionLifecycle(book: Book, startPage: Int, endPage: Int) async throws {
+        // Start session
+        try await startSession(for: book, startingPage: startPage)
+        
+        // Simulate reading time
+        try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+        
+        // Pause session
+        try await pauseSession()
+        
+        // Simulate break
+        try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+        
+        // Resume session
+        try await resumeSession()
+        
+        // Record distraction
+        try await recordDistraction()
+        
+        // End session
+        try await endSession(currentPage: endPage)
     }
 }

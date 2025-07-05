@@ -49,7 +49,3 @@ extension ReadingSession {
         return totalTime
     }
 }
-
-extension Notification.Name {
-    static let sessionEnded = Notification.Name("sessionEnded")
-}
